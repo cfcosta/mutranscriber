@@ -336,7 +336,8 @@ mod tests {
     #[test]
     fn test_model_variant_config() {
         let small_config = ModelVariant::Small.config();
-        assert_eq!(small_config.audio_encoder.output_dim, 2048);
+        assert_eq!(small_config.audio_encoder.output_dim, 1024);
+        assert_eq!(small_config.audio_encoder.d_model, 896);
 
         let large_config = ModelVariant::Large.config();
         assert_eq!(large_config.audio_encoder.output_dim, 2560);

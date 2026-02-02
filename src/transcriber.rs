@@ -203,6 +203,7 @@ impl Transcriber {
     }
 
     /// Get the transcript output path for an input file.
+    #[cfg(any(feature = "gstreamer", test))]
     fn transcript_path(&self, input_path: &Path) -> PathBuf {
         let output_dir = self
             .config

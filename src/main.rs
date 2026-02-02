@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse model variant
     let variant = match args.model.to_lowercase().as_str() {
         "large" | "1.7b" => ModelVariant::Large,
-        "small" | "0.6b" | _ => ModelVariant::Small,
+        _ => ModelVariant::Small,
     };
 
     // Build configuration

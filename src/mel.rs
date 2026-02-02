@@ -13,26 +13,21 @@ pub const SAMPLE_RATE: usize = 16000;
 pub const CHUNK_LENGTH: usize = 30; // seconds
 
 /// Pre-computed mel filterbank for 128 bins.
-#[allow(dead_code)]
 pub struct MelFilters {
     filters: Vec<f32>,
-    n_mels: usize,
-    n_fft: usize,
+    n_freqs: usize,
 }
 
 impl MelFilters {
     /// Create mel filterbank for specified parameters.
     pub fn new(n_mels: usize, n_fft: usize, sample_rate: usize) -> Self {
         let filters = create_mel_filterbank(n_mels, n_fft, sample_rate);
-        Self {
-            filters,
-            n_mels,
-            n_fft,
-        }
+        let n_freqs = n_fft / 2 + 1;
+        Self { filters, n_freqs }
     }
 
     /// Create default 128-bin mel filterbank.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn default_128() -> Self {
         Self::new(N_MELS, N_FFT, SAMPLE_RATE)
     }
@@ -40,17 +35,12 @@ impl MelFilters {
     /// Get filter value at (mel_bin, fft_bin).
     #[inline]
     pub fn get(&self, mel_bin: usize, fft_bin: usize) -> f32 {
-        self.filters[mel_bin * (self.n_fft / 2 + 1) + fft_bin]
+        self.filters[mel_bin * self.n_freqs + fft_bin]
     }
 
-    /// Get the full filterbank as a slice.
-    #[allow(dead_code)]
-    pub fn as_slice(&self) -> &[f32] {
-        &self.filters
-    }
-
+    #[cfg(test)]
     pub fn n_mels(&self) -> usize {
-        self.n_mels
+        self.filters.len() / self.n_freqs
     }
 }
 
@@ -83,7 +73,7 @@ fn create_mel_filterbank(n_mels: usize, n_fft: usize, sample_rate: usize) -> Vec
     // Convert mel points back to Hz
     let hz_points: Vec<f64> = mel_points.iter().map(|&m| mel_to_hz(m)).collect();
 
-    // Convert Hz to FFT bin indices
+    // Convert Hz to Fft bin indices
     let bin_points: Vec<usize> = hz_points
         .iter()
         .map(|&f| ((n_fft as f64 + 1.0) * f / sample_rate as f64).floor() as usize)
@@ -121,7 +111,7 @@ fn create_mel_filterbank(n_mels: usize, n_fft: usize, sample_rate: usize) -> Vec
     filters
 }
 
-/// Pre-computed Hann window for FFT.
+/// Pre-computed Hann window for Fft.
 pub struct HannWindow {
     window: Vec<f32>,
 }
@@ -139,16 +129,16 @@ impl HannWindow {
     }
 }
 
-/// FFT computation using Cooley-Tukey algorithm.
-pub struct FFT {
+/// Fft computation using Cooley-Tukey algorithm.
+pub struct Fft {
     size: usize,
     twiddles_re: Vec<f32>,
     twiddles_im: Vec<f32>,
 }
 
-impl FFT {
+impl Fft {
     pub fn new(size: usize) -> Self {
-        assert!(size.is_power_of_two(), "FFT size must be power of 2");
+        assert!(size.is_power_of_two(), "Fft size must be power of 2");
 
         let mut twiddles_re = Vec::with_capacity(size / 2);
         let mut twiddles_im = Vec::with_capacity(size / 2);
@@ -166,7 +156,7 @@ impl FFT {
         }
     }
 
-    /// Compute FFT magnitude spectrum (only positive frequencies).
+    /// Compute Fft magnitude spectrum (only positive frequencies).
     /// Output is size/2 + 1 magnitudes.
     pub fn magnitude_spectrum(&self, input: &[f32], output: &mut [f32]) {
         assert!(input.len() >= self.size);
@@ -179,7 +169,7 @@ impl FFT {
         // Copy input to real part
         real[..self.size].copy_from_slice(&input[..self.size]);
 
-        // In-place FFT
+        // In-place Fft
         self.fft_inplace(&mut real, &mut imag);
 
         // Compute magnitude squared for positive frequencies
@@ -206,7 +196,7 @@ impl FFT {
             j += m;
         }
 
-        // Cooley-Tukey iterative FFT
+        // Cooley-Tukey iterative Fft
         let mut len = 2;
         while len <= n {
             let half_len = len / 2;
@@ -241,7 +231,7 @@ impl FFT {
 pub struct MelSpectrogram {
     mel_filters: Arc<MelFilters>,
     hann_window: HannWindow,
-    fft: FFT,
+    fft: Fft,
     n_fft: usize,
     hop_length: usize,
     n_mels: usize,
@@ -255,13 +245,13 @@ impl MelSpectrogram {
 
     /// Create mel spectrogram extractor with custom parameters.
     pub fn with_params(n_mels: usize, n_fft: usize, hop_length: usize, sample_rate: usize) -> Self {
-        // Round up n_fft to next power of 2 for FFT
+        // Round up n_fft to next power of 2 for Fft
         let fft_size = n_fft.next_power_of_two();
 
         Self {
             mel_filters: Arc::new(MelFilters::new(n_mels, n_fft, sample_rate)),
             hann_window: HannWindow::new(n_fft),
-            fft: FFT::new(fft_size),
+            fft: Fft::new(fft_size),
             n_fft,
             hop_length,
             n_mels,
@@ -300,15 +290,16 @@ impl MelSpectrogram {
                 }
             }
 
-            // Compute FFT magnitude spectrum
+            // Compute Fft magnitude spectrum
             self.fft.magnitude_spectrum(&windowed, &mut magnitudes);
 
             // Apply mel filterbank
             for m in 0..self.n_mels {
-                let mut sum = 0.0f32;
-                for k in 0..n_freqs {
-                    sum += magnitudes[k] * self.mel_filters.get(m, k);
-                }
+                let sum: f32 = magnitudes[..n_freqs]
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &mag)| mag * self.mel_filters.get(m, k))
+                    .sum();
                 // Log mel spectrogram with floor
                 mel_spec[frame * self.n_mels + m] = (sum.max(1e-10)).log10();
             }
@@ -333,24 +324,6 @@ impl MelSpectrogram {
         let n_frames = (n_samples.saturating_sub(self.n_fft)) / self.hop_length + 1;
         let mel_spec = self.compute(audio);
         (mel_spec, n_frames.max(1), self.n_mels)
-    }
-
-    /// Get the number of mel bins.
-    #[allow(dead_code)]
-    pub fn n_mels(&self) -> usize {
-        self.n_mels
-    }
-
-    /// Get the hop length.
-    #[allow(dead_code)]
-    pub fn hop_length(&self) -> usize {
-        self.hop_length
-    }
-
-    /// Get the FFT size.
-    #[allow(dead_code)]
-    pub fn n_fft(&self) -> usize {
-        self.n_fft
     }
 }
 
@@ -383,7 +356,7 @@ mod tests {
 
     #[test]
     fn test_fft_size() {
-        let fft = FFT::new(512);
+        let fft = Fft::new(512);
         assert_eq!(fft.size, 512);
     }
 

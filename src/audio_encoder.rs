@@ -228,7 +228,6 @@ pub struct Qwen3AudioEncoder {
     conv_out: Linear, // Linear projection after conv, not Conv2d
     layers: Vec<EncoderLayer>,
     output_proj: OutputProjection,
-    config: AudioEncoderConfig,
 }
 
 impl Qwen3AudioEncoder {
@@ -261,7 +260,6 @@ impl Qwen3AudioEncoder {
             conv_out,
             layers,
             output_proj,
-            config: config.clone(),
         })
     }
 
@@ -299,16 +297,6 @@ impl Qwen3AudioEncoder {
         // Output projection
         self.output_proj.forward(&x)
     }
-
-    /// Get the output dimension.
-    pub fn output_dim(&self) -> usize {
-        self.config.output_dim
-    }
-
-    /// Get the time downsampling factor.
-    pub fn downsample_factor(&self) -> usize {
-        8 // 2 * 2 * 2 from conv layers
-    }
 }
 
 #[cfg(test)]
@@ -318,8 +306,9 @@ mod tests {
     #[test]
     fn test_config_default() {
         let config = AudioEncoderConfig::default();
-        assert_eq!(config.d_model, 1024);
-        assert_eq!(config.encoder_layers, 24);
+        assert_eq!(config.d_model, 896);
+        assert_eq!(config.encoder_layers, 18);
         assert_eq!(config.num_mel_bins, 128);
+        assert_eq!(config.output_dim, 1024);
     }
 }
