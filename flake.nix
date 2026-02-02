@@ -31,6 +31,7 @@
         pkgs = import nixpkgs {
           inherit system;
           overlays = [ (import rust-overlay) ];
+          config.allowUnfree = true;
         };
         inherit (pkgs) mkShell;
 
@@ -67,6 +68,16 @@
               taplo.enable = true;
             };
           }).config.build.wrapper;
+
+        cuda = pkgs.symlinkJoin {
+          name = "cuda-redist";
+          paths = with pkgs.cudaPackages; [
+            cuda_cudart
+            cuda_nvcc
+            cudnn
+            pkgs.cudatoolkit
+          ];
+        };
       in
       {
         checks.pre-commit-check = pre-commit-hooks.lib.${system}.run {
@@ -86,8 +97,9 @@
           name = "mutranscriber";
 
           buildInputs = [
-            rust
+            cuda
             formatter
+            rust
 
             pkgs.bacon
             pkgs.cargo-machete
@@ -105,6 +117,9 @@
             pkgs.pipewire
             pkgs.pkg-config
           ];
+
+          CUDA_HOME = if pkgs.stdenv.isLinux then "${cuda}" else "";
+          CUDA_PATH = if pkgs.stdenv.isLinux then "${cuda}" else "";
         };
 
         formatter = formatter;
