@@ -3,7 +3,7 @@
 //! This module implements mel spectrogram extraction with 128 mel bins,
 //! adapted from Whisper's implementation but configured for Qwen3-ASR.
 
-use std::{f64::consts::PI, sync::Arc};
+use std::{borrow::Cow, f64::consts::PI, sync::Arc};
 
 /// Mel spectrogram parameters for Qwen3-ASR.
 pub const N_FFT: usize = 400;
@@ -11,6 +11,8 @@ pub const HOP_LENGTH: usize = 160;
 pub const N_MELS: usize = 128;
 pub const SAMPLE_RATE: usize = 16000;
 pub const CHUNK_LENGTH: usize = 30; // seconds
+pub const N_SAMPLES: usize = CHUNK_LENGTH * SAMPLE_RATE; // 480,000 samples
+pub const NB_MAX_FRAMES: usize = N_SAMPLES / HOP_LENGTH; // 3,000 frames
 
 /// Pre-computed mel filterbank for 128 bins.
 pub struct MelFilters {
@@ -306,12 +308,17 @@ pub struct MelSpectrogram {
     n_fft: usize,
     hop_length: usize,
     n_mels: usize,
+    /// Target number of samples for padding (e.g., 480,000 for 30 seconds)
+    n_samples: Option<usize>,
 }
 
 impl MelSpectrogram {
     /// Create mel spectrogram extractor with default Qwen3-ASR parameters.
+    /// Pads audio to 30 seconds (480,000 samples) by default to match
+    /// WhisperFeatureExtractor behavior.
     pub fn new() -> Self {
         Self::with_params(N_MELS, N_FFT, HOP_LENGTH, SAMPLE_RATE)
+            .with_padding(N_SAMPLES)
     }
 
     /// Create mel spectrogram extractor with custom parameters.
@@ -331,17 +338,55 @@ impl MelSpectrogram {
             n_fft,
             hop_length,
             n_mels,
+            n_samples: None,
         }
+    }
+
+    /// Enable padding to a fixed number of samples.
+    ///
+    /// When set, audio shorter than n_samples will be right-padded with zeros,
+    /// and audio longer than n_samples will be truncated.
+    /// This matches WhisperFeatureExtractor's behavior with padding="max_length".
+    pub fn with_padding(mut self, n_samples: usize) -> Self {
+        self.n_samples = Some(n_samples);
+        self
+    }
+
+    /// Disable padding (process audio at its natural length).
+    pub fn without_padding(mut self) -> Self {
+        self.n_samples = None;
+        self
     }
 
     /// Compute log mel spectrogram from audio samples.
     ///
     /// Input: f32 audio samples at 16kHz
     /// Output: (n_frames, n_mels) mel spectrogram
+    ///
+    /// If padding is enabled (default), audio is padded/truncated to
+    /// n_samples before processing.
     pub fn compute(&self, audio: &[f32]) -> Vec<f32> {
-        let n_samples = audio.len();
+        // Apply padding/truncation if configured
+        let audio: Cow<'_, [f32]> = if let Some(target_samples) = self.n_samples
+        {
+            if audio.len() < target_samples {
+                // Right-pad with zeros (silence)
+                let mut padded = audio.to_vec();
+                padded.resize(target_samples, 0.0);
+                Cow::Owned(padded)
+            } else if audio.len() > target_samples {
+                // Truncate to target length
+                Cow::Borrowed(&audio[..target_samples])
+            } else {
+                Cow::Borrowed(audio)
+            }
+        } else {
+            Cow::Borrowed(audio)
+        };
+
+        let audio_len = audio.len();
         let n_frames =
-            (n_samples.saturating_sub(self.n_fft)) / self.hop_length + 1;
+            (audio_len.saturating_sub(self.n_fft)) / self.hop_length + 1;
 
         if n_frames == 0 {
             return vec![0.0; self.n_mels];
@@ -357,7 +402,7 @@ impl MelSpectrogram {
 
         for frame in 0..n_frames {
             let start = frame * self.hop_length;
-            let end = (start + self.n_fft).min(n_samples);
+            let end = (start + self.n_fft).min(audio_len);
 
             // Apply Hann window
             windowed.fill(0.0);
@@ -400,10 +445,9 @@ impl MelSpectrogram {
     /// Compute mel spectrogram and return as 2D structure.
     /// Returns (mel_spec, n_frames, n_mels).
     pub fn compute_2d(&self, audio: &[f32]) -> (Vec<f32>, usize, usize) {
-        let n_samples = audio.len();
-        let n_frames =
-            (n_samples.saturating_sub(self.n_fft)) / self.hop_length + 1;
         let mel_spec = self.compute(audio);
+        // Derive n_frames from actual mel_spec size (accounts for padding)
+        let n_frames = mel_spec.len() / self.n_mels;
         (mel_spec, n_frames.max(1), self.n_mels)
     }
 }
@@ -506,5 +550,40 @@ mod tests {
 
         // Filters should have overlapping triangular shapes
         // This is a known issue with 128 mels and n_fft=400: low freq filters are sparse
+    }
+
+    #[test]
+    fn test_padding_to_30_seconds() {
+        // Test audio: ~10 seconds = 160,000 samples
+        let audio_10s = vec![0.0f32; 160_000];
+
+        // With default padding (30s) - should pad to 480,000 samples
+        let mel_padded = MelSpectrogram::new();
+        let (spec, frames, mels) = mel_padded.compute_2d(&audio_10s);
+
+        // Expected: (480000 - 400) / 160 + 1 = 2998 frames
+        let expected_frames = (N_SAMPLES - N_FFT) / HOP_LENGTH + 1;
+        assert_eq!(frames, expected_frames);
+        assert_eq!(mels, N_MELS);
+        eprintln!(
+            "Padded (30s): {} frames x {} mels (expected: {})",
+            frames, mels, expected_frames
+        );
+
+        // Without padding - should use original length
+        let mel_no_pad = MelSpectrogram::new().without_padding();
+        let (spec2, frames2, mels2) = mel_no_pad.compute_2d(&audio_10s);
+
+        // Expected: (160000 - 400) / 160 + 1 = 998 frames
+        let expected_frames_no_pad = (160_000 - N_FFT) / HOP_LENGTH + 1;
+        assert_eq!(frames2, expected_frames_no_pad);
+        assert_eq!(mels2, N_MELS);
+        eprintln!(
+            "No padding (10s): {} frames x {} mels (expected: {})",
+            frames2, mels2, expected_frames_no_pad
+        );
+
+        // Padded should have more data
+        assert!(spec.len() > spec2.len());
     }
 }
