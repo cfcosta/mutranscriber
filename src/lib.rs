@@ -32,6 +32,7 @@ mod audio_encoder;
 mod config;
 mod mel;
 mod model;
+mod qwen3_decoder;
 mod transcriber;
 
 pub use config::{AudioEncoderConfig, Qwen3ASRConfig};

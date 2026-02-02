@@ -274,52 +274,38 @@ fn extract_audio_sync(path: &Path, sample_rate: u32) -> TranscriberResult<Vec<f3
         .dynamic_cast::<gst_app::AppSink>()
         .map_err(|_| TranscriberError::Gstreamer("Failed to cast to AppSink".to_string()))?;
 
-    // Collect audio samples
-    let samples = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let samples_clone = samples.clone();
-
-    appsink.set_callbacks(
-        gst_app::AppSinkCallbacks::builder()
-            .new_sample(move |sink| {
-                let sample = sink.pull_sample().map_err(|_| gst::FlowError::Error)?;
-                let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
-                let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
-
-                // Convert bytes to f32 samples (F32LE format)
-                let bytes = map.as_slice();
-                let float_samples: Vec<f32> = bytes
-                    .chunks_exact(4)
-                    .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                    .collect();
-
-                samples_clone.lock().unwrap().extend(float_samples);
-                Ok(gst::FlowSuccess::Ok)
-            })
-            .build(),
-    );
-
     // Start pipeline
     pipeline
         .set_state(gst::State::Playing)
         .map_err(|e| TranscriberError::Gstreamer(format!("Failed to start pipeline: {:?}", e)))?;
 
-    // Wait for EOS or error
-    let bus = pipeline
-        .bus()
-        .ok_or_else(|| TranscriberError::Gstreamer("Failed to get bus".to_string()))?;
+    // Collect samples using pull-based API (avoids Arc ownership issues with callbacks)
+    let mut samples = Vec::new();
 
-    for msg in bus.iter_timed(gst::ClockTime::NONE) {
-        use gst::MessageView;
-        match msg.view() {
-            MessageView::Eos(..) => break,
-            MessageView::Error(err) => {
+    while let Ok(sample) = appsink.pull_sample() {
+        if let Some(buffer) = sample.buffer() {
+            if let Ok(map) = buffer.map_readable() {
+                let bytes = map.as_slice();
+                let float_samples: Vec<f32> = bytes
+                    .chunks_exact(4)
+                    .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                    .collect();
+                samples.extend(float_samples);
+            }
+        }
+    }
+
+    // Check for pipeline errors
+    if let Some(bus) = pipeline.bus() {
+        for msg in bus.iter() {
+            use gst::MessageView;
+            if let MessageView::Error(err) = msg.view() {
                 pipeline.set_state(gst::State::Null).ok();
                 return Err(TranscriberError::Gstreamer(format!(
                     "Pipeline error: {}",
                     err.error()
                 )));
             }
-            _ => {}
         }
     }
 
@@ -327,12 +313,6 @@ fn extract_audio_sync(path: &Path, sample_rate: u32) -> TranscriberResult<Vec<f3
     pipeline
         .set_state(gst::State::Null)
         .map_err(|e| TranscriberError::Gstreamer(format!("Failed to stop pipeline: {:?}", e)))?;
-
-    // Return collected samples
-    let samples = Arc::try_unwrap(samples)
-        .map_err(|_| TranscriberError::AudioExtraction("Failed to unwrap samples".to_string()))?
-        .into_inner()
-        .map_err(|e| TranscriberError::AudioExtraction(e.to_string()))?;
 
     if samples.is_empty() {
         return Err(TranscriberError::AudioExtraction(

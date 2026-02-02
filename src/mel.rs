@@ -300,18 +300,20 @@ impl MelSpectrogram {
                     .enumerate()
                     .map(|(k, &mag)| mag * self.mel_filters.get(m, k))
                     .sum();
-                // Log mel spectrogram with floor
+                // Log mel spectrogram with floor (using log10 like Whisper)
                 mel_spec[frame * self.n_mels + m] = (sum.max(1e-10)).log10();
             }
         }
 
-        // Normalize to [0, 1] range
+        // Whisper-style normalization:
+        // 1. Clamp to (max - 8.0) to limit dynamic range
+        // 2. Normalize to roughly [-1, 1] range
         let max_val = mel_spec.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        let min_val = mel_spec.iter().copied().fold(f32::INFINITY, f32::min);
-        let range = (max_val - min_val).max(1e-6);
-
         for v in &mut mel_spec {
-            *v = (*v - min_val) / range;
+            // Clamp minimum to max - 8.0 (80dB dynamic range)
+            *v = v.max(max_val - 8.0);
+            // Shift and scale: (x + 4.0) / 4.0 maps to roughly [-1, 1]
+            *v = (*v + 4.0) / 4.0;
         }
 
         mel_spec

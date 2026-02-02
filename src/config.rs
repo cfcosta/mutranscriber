@@ -74,6 +74,8 @@ pub struct Qwen3ASRConfig {
     pub audio_start_token_id: u32,
     /// Audio end token ID (default: 151670)
     pub audio_end_token_id: u32,
+    /// Audio token ID - placeholder that gets replaced by audio embeddings (default: 151676)
+    pub audio_token_id: u32,
 }
 
 /// Raw HuggingFace config format for parsing.
@@ -83,6 +85,7 @@ struct RawConfig {
     text_config: Option<RawQwen3Config>,
     audio_start_token_id: Option<u32>,
     audio_end_token_id: Option<u32>,
+    audio_token_id: Option<u32>,
 }
 
 /// Raw Qwen3 config from HuggingFace format.
@@ -163,6 +166,7 @@ impl Qwen3ASRConfig {
             text_config,
             audio_start_token_id: raw.audio_start_token_id.unwrap_or(151669),
             audio_end_token_id: raw.audio_end_token_id.unwrap_or(151670),
+            audio_token_id: raw.audio_token_id.unwrap_or(151676),
         })
     }
 
@@ -195,6 +199,7 @@ impl Qwen3ASRConfig {
             text_config: Self::default_qwen3_config(),
             audio_start_token_id: 151669,
             audio_end_token_id: 151670,
+            audio_token_id: 151676,
         }
     }
 
@@ -225,6 +230,7 @@ impl Qwen3ASRConfig {
             },
             audio_start_token_id: 151669,
             audio_end_token_id: 151670,
+            audio_token_id: 151676,
         }
     }
 }

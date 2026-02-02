@@ -110,18 +110,19 @@ fn test_mel_spectrogram_computation() {
     // Verify data size matches dimensions
     assert_eq!(mel_data.len(), n_frames * n_mels, "Mel data size mismatch");
 
-    // Verify mel values are normalized (0-1 range after log scaling)
+    // Verify mel values are normalized (Whisper-style: roughly [-1, 1] range)
     let min_val = mel_data.iter().cloned().fold(f32::INFINITY, f32::min);
     let max_val = mel_data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
 
+    // Whisper normalization: (log_mel + 4.0) / 4.0, resulting in roughly [-1, 1]
     assert!(
-        min_val >= 0.0,
-        "Mel values should be non-negative, got min: {}",
+        min_val >= -2.0,
+        "Mel values should be >= -2.0, got min: {}",
         min_val
     );
     assert!(
-        max_val <= 1.0,
-        "Mel values should be <= 1.0, got max: {}",
+        max_val <= 2.0,
+        "Mel values should be <= 2.0, got max: {}",
         max_val
     );
 }
