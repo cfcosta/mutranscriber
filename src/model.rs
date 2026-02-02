@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::VarBuilder;
 use hf_hub::{Repo, RepoType, api::tokio::Api};
-use tokenizers::{Tokenizer, models::bpe::BPE};
+use tokenizers::{Tokenizer, models::bpe::BPE, pre_tokenizers::byte_level::ByteLevel};
 
 use crate::{
     audio_encoder::Qwen3AudioEncoder,
@@ -171,7 +171,11 @@ impl Qwen3ASRModel {
         .build()
         .map_err(|e| candle_core::Error::Msg(format!("Failed to build BPE tokenizer: {}", e)))?;
 
-        let tokenizer = Tokenizer::new(bpe);
+        // Configure tokenizer with ByteLevel decoder to properly handle GPT-2 BPE
+        // byte-to-unicode mapping (e.g., Ġ for space). Without this, subword tokens
+        // get separated by spaces incorrectly.
+        let mut tokenizer = Tokenizer::new(bpe);
+        tokenizer.with_decoder(Some(ByteLevel::default()));
 
         Self::load_with_tokenizer(config, tokenizer, model_paths, device)
     }
@@ -290,20 +294,12 @@ impl Qwen3ASRModel {
         tracing::debug!("user tokens: {:?}", user_tokens.get_ids());
         tracing::debug!("assistant tokens: {:?}", assistant_tokens.get_ids());
 
-        // Encode the instruction
-        let instruction = "Transcribe this audio to text.\n";
-        let instruction_tokens = self
-            .tokenizer
-            .encode(instruction, false)
-            .map_err(|e| candle_core::Error::Msg(format!("Tokenizer error: {}", e)))?;
-        tracing::debug!("instruction tokens: {:?}", instruction_tokens.get_ids());
-
         // Build the prompt sequence before audio
-        // Format: <|im_start|>user\n<instruction>\n<|audio_start|>
+        // Format: <|im_start|>user\n<|audio_start|>
+        // Note: No explicit instruction needed - model is trained to transcribe audio automatically
         let mut pre_audio_tokens: Vec<u32> = vec![im_start_token];
         pre_audio_tokens.extend(user_tokens.get_ids().iter().copied());
         pre_audio_tokens.push(newline_token);
-        pre_audio_tokens.extend(instruction_tokens.get_ids().iter().copied());
         pre_audio_tokens.push(audio_start_token);
 
         // Build the prompt sequence after audio
@@ -400,19 +396,13 @@ impl Qwen3ASRModel {
             generated_tokens
         );
 
-        // Decode tokens to text
+        // Decode tokens to text - ByteLevel decoder handles byte-to-unicode mapping
         let text = self
             .tokenizer
             .decode(&generated_tokens, true)
             .map_err(|e| candle_core::Error::Msg(format!("Tokenizer decode error: {}", e)))?;
 
-        // Clean up GPT-style tokenizer artifacts:
-        // - Replace "Ġ" with space (this is how GPT tokenizers encode spaces)
-        // - Remove "language <lang>" prefix if present
-        // - Normalize whitespace
-        let text = text.replace('Ġ', " ");
-
-        // Normalize whitespace first, then remove language prefix
+        // Normalize whitespace and remove language prefix
         let words: Vec<&str> = text.split_whitespace().collect();
 
         // Remove "language XYZ" prefix (the model outputs language detection first)
