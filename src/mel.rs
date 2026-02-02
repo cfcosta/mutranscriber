@@ -12,7 +12,6 @@ pub const N_MELS: usize = 128;
 pub const SAMPLE_RATE: usize = 16000;
 pub const CHUNK_LENGTH: usize = 30; // seconds
 pub const N_SAMPLES: usize = CHUNK_LENGTH * SAMPLE_RATE; // 480,000 samples
-pub const NB_MAX_FRAMES: usize = N_SAMPLES / HOP_LENGTH; // 3,000 frames
 
 /// Pre-computed mel filterbank for 128 bins.
 pub struct MelFilters {
@@ -47,17 +46,20 @@ impl MelFilters {
 
     /// Get the raw filter data for a specific mel bin.
     /// Returns a slice of n_freqs values.
+    #[cfg(test)]
     pub fn get_filter(&self, mel_bin: usize) -> &[f32] {
         let start = mel_bin * self.n_freqs;
         &self.filters[start..start + self.n_freqs]
     }
 
     /// Get the number of frequency bins.
+    #[cfg(test)]
     pub fn n_freqs(&self) -> usize {
         self.n_freqs
     }
 
     /// Dump filterbank info for diagnostic comparison.
+    #[cfg(test)]
     pub fn dump_diagnostics(&self) -> String {
         let n_mels = self.filters.len() / self.n_freqs;
         let mut output = String::new();
