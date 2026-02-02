@@ -5,17 +5,15 @@
 //! - 24-layer Transformer encoder
 //! - Output projection to LLM hidden dimension
 
-use candle_core::{Device, Module, Result, Tensor};
+use candle_core::{Module, Result, Tensor};
 use candle_nn::{
     Activation,
     Conv2d,
     Conv2dConfig,
-    Embedding,
     LayerNorm,
     Linear,
     VarBuilder,
     conv2d,
-    embedding,
     layer_norm,
     linear,
 };
@@ -216,41 +214,18 @@ impl OutputProjection {
     }
 }
 
-/// Positional embeddings for the encoder.
-struct PositionalEmbedding {
-    embedding: Embedding,
-    #[allow(dead_code)]
-    max_positions: usize,
-}
-
-impl PositionalEmbedding {
-    fn new(max_positions: usize, d_model: usize, vb: VarBuilder) -> Result<Self> {
-        let embedding = embedding(max_positions, d_model, vb)?;
-        Ok(Self {
-            embedding,
-            max_positions,
-        })
-    }
-
-    fn forward(&self, seq_len: usize, device: &Device) -> Result<Tensor> {
-        let positions = Tensor::arange(0u32, seq_len as u32, device)?;
-        self.embedding.forward(&positions)
-    }
-}
-
 /// Qwen3 Audio Encoder (AuT).
 ///
 /// Architecture:
-/// 1. Conv2D downsampling (8x total): 128 -> 480 -> 480 -> 480 -> 1024
-/// 2. Positional embedding
-/// 3. 24 Transformer encoder layers
+/// 1. Conv2D downsampling: (batch, 1, mel_bins, time) -> (batch, 480, mel_bins/8, time/8)
+/// 2. Linear projection: flatten and project to d_model
+/// 3. 18 Transformer encoder layers
 /// 4. Output projection to LLM dimension
 pub struct Qwen3AudioEncoder {
     conv1: ConvBlock,
     conv2: ConvBlock,
     conv3: ConvBlock,
-    conv_out: ConvBlock,
-    pos_embed: PositionalEmbedding,
+    conv_out: Linear, // Linear projection after conv, not Conv2d
     layers: Vec<EncoderLayer>,
     output_proj: OutputProjection,
     config: AudioEncoderConfig,
@@ -259,16 +234,15 @@ pub struct Qwen3AudioEncoder {
 impl Qwen3AudioEncoder {
     /// Load audio encoder from pretrained weights.
     pub fn new(config: &AudioEncoderConfig, vb: VarBuilder) -> Result<Self> {
-        // Conv2D downsampling stack (8x total)
-        // Input: (batch, 128, time, 1) -> Output: (batch, 1024, time/8, 1)
-        let conv1 = ConvBlock::new(config.num_mel_bins, 480, 2, vb.pp("conv1"))?;
-        let conv2 = ConvBlock::new(480, 480, 2, vb.pp("conv2"))?;
-        let conv3 = ConvBlock::new(480, 480, 2, vb.pp("conv3"))?;
-        let conv_out = ConvBlock::new(480, config.d_model, 1, vb.pp("conv_out"))?;
+        // Conv2D downsampling stack
+        // Input: (batch, 1, mel_bins=128, time)
+        // After 3 stride-2 convs: (batch, 480, 16, time/8)
+        let conv1 = ConvBlock::new(1, 480, 2, vb.pp("conv2d1"))?;
+        let conv2 = ConvBlock::new(480, 480, 2, vb.pp("conv2d2"))?;
+        let conv3 = ConvBlock::new(480, 480, 2, vb.pp("conv2d3"))?;
 
-        // Positional embedding (max 3000 positions for 30s audio with 8x downsample)
-        let max_positions = (30 * 16000 / 160 / 8) + 100; // ~3100
-        let pos_embed = PositionalEmbedding::new(max_positions, config.d_model, vb.pp("pos_embed"))?;
+        // Linear projection (no bias): 480 * 16 = 7680 -> d_model (896)
+        let conv_out = candle_nn::linear_no_bias(480 * 16, config.d_model, vb.pp("conv_out"))?;
 
         // Transformer encoder layers
         let mut layers = Vec::with_capacity(config.encoder_layers);
@@ -277,16 +251,14 @@ impl Qwen3AudioEncoder {
             layers.push(layer);
         }
 
-        // Output projection
-        let output_proj =
-            OutputProjection::new(config.d_model, config.output_dim, vb.pp("output_proj"))?;
+        // Output projection (ln_post, proj1, proj2 are at the root level)
+        let output_proj = OutputProjection::new(config.d_model, config.output_dim, vb.clone())?;
 
         Ok(Self {
             conv1,
             conv2,
             conv3,
             conv_out,
-            pos_embed,
             layers,
             output_proj,
             config: config.clone(),
@@ -298,25 +270,25 @@ impl Qwen3AudioEncoder {
     /// Input: Mel spectrogram tensor of shape (batch, n_mels, n_frames)
     /// Output: Audio features of shape (batch, seq_len, output_dim)
     pub fn forward(&self, mel: &Tensor) -> Result<Tensor> {
-        let device = mel.device();
+        // Input: (batch, n_mels=128, n_frames)
+        // Reshape to conv input: (batch, 1, n_mels, n_frames)
+        let x = mel.unsqueeze(1)?;
 
-        // Add channel dimension: (batch, n_mels, n_frames) -> (batch, n_mels, n_frames, 1)
-        let x = mel.unsqueeze(3)?;
-
-        // Conv2D downsampling (8x in time dimension)
+        // Conv2D downsampling (8x in mel and time dimensions)
+        // After conv1 (stride 2): (batch, 480, 64, time/2)
+        // After conv2 (stride 2): (batch, 480, 32, time/4)
+        // After conv3 (stride 2): (batch, 480, 16, time/8)
         let x = self.conv1.forward(&x)?;
         let x = self.conv2.forward(&x)?;
         let x = self.conv3.forward(&x)?;
-        let x = self.conv_out.forward(&x)?;
 
-        // Reshape for transformer: (batch, d_model, time', 1) -> (batch, time', d_model)
-        let (_batch_size, _d_model, time_len, _) = x.dims4()?;
-        let x = x.squeeze(3)?; // (batch, d_model, time')
-        let x = x.transpose(1, 2)?; // (batch, time', d_model)
+        // Reshape for linear: (batch, 480, 16, time/8) -> (batch, time/8, 480*16)
+        let (batch_size, channels, mel_dim, time_dim) = x.dims4()?;
+        let x = x.permute((0, 3, 1, 2))?; // (batch, time/8, 480, 16)
+        let x = x.reshape((batch_size, time_dim, channels * mel_dim))?; // (batch, time/8, 7680)
 
-        // Add positional embedding
-        let pos = self.pos_embed.forward(time_len, device)?;
-        let x = x.broadcast_add(&pos)?;
+        // Linear projection to d_model
+        let x = self.conv_out.forward(&x)?; // (batch, time/8, d_model)
 
         // Transformer encoder layers
         let mut x = x;

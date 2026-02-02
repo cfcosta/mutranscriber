@@ -171,7 +171,7 @@ impl Qwen3ASRConfig {
         Qwen3Config {
             vocab_size: 151936,
             hidden_size: 1024,
-            intermediate_size: 2816,
+            intermediate_size: 3072, // Based on model tensors: mlp.gate_proj [3072, 1024]
             num_hidden_layers: 28,
             num_attention_heads: 16,
             num_key_value_heads: 8,
@@ -181,7 +181,7 @@ impl Qwen3ASRConfig {
             rope_theta: 10000.0,
             rms_norm_eps: 1e-6,
             tie_word_embeddings: true,
-            head_dim: 64, // 1024 / 16
+            head_dim: 128, // 2048 / 16 = 128 (q_proj output 2048, 16 heads)
             attention_bias: false,
             use_sliding_window: false,
             hidden_act: Activation::Silu,

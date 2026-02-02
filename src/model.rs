@@ -139,11 +139,15 @@ impl Qwen3ASRModel {
         // Load model weights
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, device)? };
 
-        // Initialize audio encoder
-        let audio_encoder = Qwen3AudioEncoder::new(&config.audio_encoder, vb.pp("audio_encoder"))?;
+        // Model uses "thinker" prefix for all weights
+        let vb = vb.pp("thinker");
 
-        // Initialize LLM decoder
-        let llm = Qwen3LLM::new(&config.text_config, vb.pp("model"))?;
+        // Initialize audio encoder (weights under "thinker.audio_tower")
+        let audio_encoder = Qwen3AudioEncoder::new(&config.audio_encoder, vb.pp("audio_tower"))?;
+
+        // Initialize LLM decoder (weights under "thinker.model")
+        // Qwen3LLM internally adds "model" prefix, so we just pass vb (thinker)
+        let llm = Qwen3LLM::new(&config.text_config, vb.clone())?;
 
         // Initialize mel spectrogram extractor
         let mel_extractor = MelSpectrogram::new();
