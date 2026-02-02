@@ -6,13 +6,13 @@
 use std::path::PathBuf;
 
 use mutranscriber::{
-    HOP_LENGTH,
     MelSpectrogram,
     ModelVariant,
-    N_MELS,
-    SAMPLE_RATE,
     Transcriber,
     TranscriberConfig,
+    HOP_LENGTH,
+    N_MELS,
+    SAMPLE_RATE,
 };
 
 /// Path to the test audio fixture.
@@ -49,7 +49,8 @@ fn test_audio_file_exists() {
     let path = test_audio_path();
     assert!(path.exists(), "Test audio fixture missing: {:?}", path);
 
-    let metadata = std::fs::metadata(&path).expect("Failed to read file metadata");
+    let metadata =
+        std::fs::metadata(&path).expect("Failed to read file metadata");
     assert!(metadata.len() > 0, "Test audio file is empty");
 }
 
@@ -235,4 +236,40 @@ async fn test_full_transcription() {
 fn test_model_variant_ids() {
     assert_eq!(ModelVariant::Small.model_id(), "Qwen/Qwen3-ASR-0.6B");
     assert_eq!(ModelVariant::Large.model_id(), "Qwen/Qwen3-ASR-1.7B");
+}
+
+/// Full transcription test with 1.7B model - requires larger model download.
+///
+/// Run with: cargo test --test integration_test test_full_transcription_large -- --ignored
+#[tokio::test]
+#[ignore] // Requires ~4GB model download
+async fn test_full_transcription_large() {
+    let samples = load_test_audio();
+
+    let config = TranscriberConfig {
+        variant: ModelVariant::Large,
+        use_gpu: false, // Use CPU for CI compatibility
+        sample_rate: 16000,
+        output_dir: None,
+    };
+
+    let transcriber = Transcriber::with_config(config);
+
+    // Preload model
+    transcriber
+        .preload()
+        .await
+        .expect("Failed to preload model");
+    assert!(transcriber.is_model_loaded().await);
+
+    // Transcribe - this exercises the full pipeline
+    let transcript = transcriber
+        .transcribe_audio(&samples)
+        .await
+        .expect("Transcription failed");
+
+    // Verify transcript is not empty
+    assert!(!transcript.is_empty(), "Transcript should not be empty");
+
+    println!("Transcription result (1.7B): {}", transcript);
 }

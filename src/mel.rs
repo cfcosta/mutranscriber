@@ -55,7 +55,11 @@ fn mel_to_hz(mel: f64) -> f64 {
 }
 
 /// Create triangular mel filterbank matrix.
-fn create_mel_filterbank(n_mels: usize, n_fft: usize, sample_rate: usize) -> Vec<f32> {
+fn create_mel_filterbank(
+    n_mels: usize,
+    n_fft: usize,
+    sample_rate: usize,
+) -> Vec<f32> {
     let n_freqs = n_fft / 2 + 1;
     let mut filters = vec![0.0f32; n_mels * n_freqs];
 
@@ -71,12 +75,15 @@ fn create_mel_filterbank(n_mels: usize, n_fft: usize, sample_rate: usize) -> Vec
         .collect();
 
     // Convert mel points back to Hz
-    let hz_points: Vec<f64> = mel_points.iter().map(|&m| mel_to_hz(m)).collect();
+    let hz_points: Vec<f64> =
+        mel_points.iter().map(|&m| mel_to_hz(m)).collect();
 
     // Convert Hz to Fft bin indices
     let bin_points: Vec<usize> = hz_points
         .iter()
-        .map(|&f| ((n_fft as f64 + 1.0) * f / sample_rate as f64).floor() as usize)
+        .map(|&f| {
+            ((n_fft as f64 + 1.0) * f / sample_rate as f64).floor() as usize
+        })
         .collect();
 
     // Create triangular filters
@@ -88,21 +95,24 @@ fn create_mel_filterbank(n_mels: usize, n_fft: usize, sample_rate: usize) -> Vec
         // Rising slope
         for k in f_left..f_center {
             if k < n_freqs && f_center > f_left {
-                filters[m * n_freqs + k] = (k - f_left) as f32 / (f_center - f_left) as f32;
+                filters[m * n_freqs + k] =
+                    (k - f_left) as f32 / (f_center - f_left) as f32;
             }
         }
 
         // Falling slope
         for k in f_center..=f_right {
             if k < n_freqs && f_right > f_center {
-                filters[m * n_freqs + k] = (f_right - k) as f32 / (f_right - f_center) as f32;
+                filters[m * n_freqs + k] =
+                    (f_right - k) as f32 / (f_right - f_center) as f32;
             }
         }
     }
 
     // Normalize filters (slaney normalization)
     for m in 0..n_mels {
-        let enorm = 2.0 / (mel_to_hz(mel_points[m + 2]) - mel_to_hz(mel_points[m])) as f32;
+        let enorm = 2.0
+            / (mel_to_hz(mel_points[m + 2]) - mel_to_hz(mel_points[m])) as f32;
         for k in 0..n_freqs {
             filters[m * n_freqs + k] *= enorm;
         }
@@ -119,7 +129,9 @@ pub struct HannWindow {
 impl HannWindow {
     pub fn new(size: usize) -> Self {
         let window: Vec<f32> = (0..size)
-            .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f64 / size as f64).cos()) as f32)
+            .map(|i| {
+                0.5 * (1.0 - (2.0 * PI * i as f64 / size as f64).cos()) as f32
+            })
             .collect();
         Self { window }
     }
@@ -244,7 +256,12 @@ impl MelSpectrogram {
     }
 
     /// Create mel spectrogram extractor with custom parameters.
-    pub fn with_params(n_mels: usize, n_fft: usize, hop_length: usize, sample_rate: usize) -> Self {
+    pub fn with_params(
+        n_mels: usize,
+        n_fft: usize,
+        hop_length: usize,
+        sample_rate: usize,
+    ) -> Self {
         // Round up n_fft to next power of 2 for Fft
         let fft_size = n_fft.next_power_of_two();
 
@@ -264,7 +281,8 @@ impl MelSpectrogram {
     /// Output: (n_frames, n_mels) mel spectrogram
     pub fn compute(&self, audio: &[f32]) -> Vec<f32> {
         let n_samples = audio.len();
-        let n_frames = (n_samples.saturating_sub(self.n_fft)) / self.hop_length + 1;
+        let n_frames =
+            (n_samples.saturating_sub(self.n_fft)) / self.hop_length + 1;
 
         if n_frames == 0 {
             return vec![0.0; self.n_mels];
@@ -308,7 +326,8 @@ impl MelSpectrogram {
         // Whisper-style normalization:
         // 1. Clamp to (max - 8.0) to limit dynamic range
         // 2. Normalize to roughly [-1, 1] range
-        let max_val = mel_spec.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let max_val =
+            mel_spec.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         for v in &mut mel_spec {
             // Clamp minimum to max - 8.0 (80dB dynamic range)
             *v = v.max(max_val - 8.0);
@@ -323,7 +342,8 @@ impl MelSpectrogram {
     /// Returns (mel_spec, n_frames, n_mels).
     pub fn compute_2d(&self, audio: &[f32]) -> (Vec<f32>, usize, usize) {
         let n_samples = audio.len();
-        let n_frames = (n_samples.saturating_sub(self.n_fft)) / self.hop_length + 1;
+        let n_frames =
+            (n_samples.saturating_sub(self.n_fft)) / self.hop_length + 1;
         let mel_spec = self.compute(audio);
         (mel_spec, n_frames.max(1), self.n_mels)
     }
@@ -380,7 +400,9 @@ mod tests {
 
         // Create 1 second of 440Hz sine wave
         let audio: Vec<f32> = (0..16000)
-            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16000.0).sin())
+            .map(|i| {
+                (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16000.0).sin()
+            })
             .collect();
 
         let result = mel_spec.compute(&audio);

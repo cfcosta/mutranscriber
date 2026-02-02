@@ -175,17 +175,17 @@ impl Qwen3ASRConfig {
         Qwen3Config {
             vocab_size: 151936,
             hidden_size: 1024,
-            intermediate_size: 3072, // Based on model tensors: mlp.gate_proj [3072, 1024]
+            intermediate_size: 3072,
             num_hidden_layers: 28,
             num_attention_heads: 16,
             num_key_value_heads: 8,
-            max_position_embeddings: 4096,
+            max_position_embeddings: 65536,
             sliding_window: None,
             max_window_layers: 28,
-            rope_theta: 10000.0,
+            rope_theta: 1000000.0, // Qwen3 uses 1M, not 10K
             rms_norm_eps: 1e-6,
             tie_word_embeddings: true,
-            head_dim: 128, // 2048 / 16 = 128 (q_proj output 2048, 16 heads)
+            head_dim: 128, // q_proj outputs 2048 (16 heads * 128 dim)
             attention_bias: false,
             use_sliding_window: false,
             hidden_act: Activation::Silu,
@@ -225,10 +225,10 @@ impl Qwen3ASRConfig {
                 max_position_embeddings: 65536,
                 sliding_window: None,
                 max_window_layers: 28,
-                rope_theta: 10000.0,
+                rope_theta: 1000000.0, // Qwen3 uses 1M, not 10K
                 rms_norm_eps: 1e-6,
                 tie_word_embeddings: true,
-                head_dim: 128, // 2048 / 16
+                head_dim: 128,
                 attention_bias: false,
                 use_sliding_window: false,
                 hidden_act: Activation::Silu,

@@ -4,8 +4,12 @@ use std::path::{Path, PathBuf};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::VarBuilder;
-use hf_hub::{Repo, RepoType, api::tokio::Api};
-use tokenizers::{Tokenizer, models::bpe::BPE, pre_tokenizers::byte_level::ByteLevel};
+use hf_hub::{api::tokio::Api, Repo, RepoType};
+use tokenizers::{
+    models::bpe::BPE,
+    pre_tokenizers::byte_level::ByteLevel,
+    Tokenizer,
+};
 
 use crate::{
     audio_encoder::Qwen3AudioEncoder,
@@ -54,36 +58,40 @@ pub struct Qwen3ASRModel {
 
 impl Qwen3ASRModel {
     /// Load model from HuggingFace Hub.
-    pub async fn from_pretrained(variant: ModelVariant, device: &Device) -> Result<Self> {
+    pub async fn from_pretrained(
+        variant: ModelVariant,
+        device: &Device,
+    ) -> Result<Self> {
         let model_id = variant.model_id();
         let config = variant.config();
 
         tracing::info!("Loading Qwen3-ASR model: {}", model_id);
 
         // Download model files from HuggingFace
-        let api = Api::new().map_err(|e| candle_core::Error::Msg(format!("HF Hub error: {}", e)))?;
+        let api = Api::new().map_err(|e| {
+            candle_core::Error::Msg(format!("HF Hub error: {}", e))
+        })?;
         let repo = api.repo(Repo::new(model_id.to_string(), RepoType::Model));
 
         // Get model file paths (config.json is downloaded but we use built-in config)
-        let _config_path = repo
-            .get("config.json")
-            .await
-            .map_err(|e| candle_core::Error::Msg(format!("Failed to get config.json: {}", e)))?;
+        let _config_path = repo.get("config.json").await.map_err(|e| {
+            candle_core::Error::Msg(format!("Failed to get config.json: {}", e))
+        })?;
         // Qwen3-ASR uses vocab.json + merges.txt instead of tokenizer.json
-        let vocab_path = repo
-            .get("vocab.json")
-            .await
-            .map_err(|e| candle_core::Error::Msg(format!("Failed to get vocab.json: {}", e)))?;
-        let merges_path = repo
-            .get("merges.txt")
-            .await
-            .map_err(|e| candle_core::Error::Msg(format!("Failed to get merges.txt: {}", e)))?;
+        let vocab_path = repo.get("vocab.json").await.map_err(|e| {
+            candle_core::Error::Msg(format!("Failed to get vocab.json: {}", e))
+        })?;
+        let merges_path = repo.get("merges.txt").await.map_err(|e| {
+            candle_core::Error::Msg(format!("Failed to get merges.txt: {}", e))
+        })?;
         // Try single model file first, fall back to sharded weights
         let model_paths = match repo.get("model.safetensors").await {
             Ok(path) => vec![path],
             Err(_) => {
                 // Model uses sharded weights - download the index and all shards
-                tracing::info!("Model uses sharded weights, downloading shards...");
+                tracing::info!(
+                    "Model uses sharded weights, downloading shards..."
+                );
 
                 let index_path = repo
                     .get("model.safetensors.index.json")
@@ -96,17 +104,28 @@ impl Qwen3ASRModel {
                     })?;
 
                 // Parse index to get shard filenames
-                let index_content = std::fs::read_to_string(&index_path).map_err(|e| {
-                    candle_core::Error::Msg(format!("Failed to read index file: {}", e))
-                })?;
-                let index: serde_json::Value = serde_json::from_str(&index_content).map_err(|e| {
-                    candle_core::Error::Msg(format!("Failed to parse index JSON: {}", e))
-                })?;
+                let index_content = std::fs::read_to_string(&index_path)
+                    .map_err(|e| {
+                        candle_core::Error::Msg(format!(
+                            "Failed to read index file: {}",
+                            e
+                        ))
+                    })?;
+                let index: serde_json::Value =
+                    serde_json::from_str(&index_content).map_err(|e| {
+                        candle_core::Error::Msg(format!(
+                            "Failed to parse index JSON: {}",
+                            e
+                        ))
+                    })?;
 
                 // Extract unique shard filenames from weight_map
-                let weight_map = index["weight_map"]
-                    .as_object()
-                    .ok_or_else(|| candle_core::Error::Msg("Invalid index format".to_string()))?;
+                let weight_map =
+                    index["weight_map"].as_object().ok_or_else(|| {
+                        candle_core::Error::Msg(
+                            "Invalid index format".to_string(),
+                        )
+                    })?;
 
                 let mut shard_files: Vec<String> = weight_map
                     .values()
@@ -115,14 +134,21 @@ impl Qwen3ASRModel {
                 shard_files.sort();
                 shard_files.dedup();
 
-                tracing::info!("Downloading {} shard files...", shard_files.len());
+                tracing::info!(
+                    "Downloading {} shard files...",
+                    shard_files.len()
+                );
 
                 // Download all shards
                 let mut shard_paths = Vec::with_capacity(shard_files.len());
                 for shard_file in &shard_files {
-                    let shard_path = repo.get(shard_file).await.map_err(|e| {
-                        candle_core::Error::Msg(format!("Failed to get {}: {}", shard_file, e))
-                    })?;
+                    let shard_path =
+                        repo.get(shard_file).await.map_err(|e| {
+                            candle_core::Error::Msg(format!(
+                                "Failed to get {}: {}",
+                                shard_file, e
+                            ))
+                        })?;
                     shard_paths.push(shard_path);
                 }
 
@@ -130,7 +156,13 @@ impl Qwen3ASRModel {
             }
         };
 
-        Self::load_from_paths(config, &vocab_path, &merges_path, &model_paths, device)
+        Self::load_from_paths(
+            config,
+            &vocab_path,
+            &merges_path,
+            &model_paths,
+            device,
+        )
     }
 
     /// Load model from local files with separate vocab and merges files.
@@ -161,15 +193,20 @@ impl Qwen3ASRModel {
     ) -> Result<Self> {
         // Build tokenizer from vocab.json and merges.txt (GPT-2 style BPE)
         let bpe = BPE::from_file(
-            vocab_path
-                .to_str()
-                .ok_or_else(|| candle_core::Error::Msg("Invalid vocab path".to_string()))?,
-            merges_path
-                .to_str()
-                .ok_or_else(|| candle_core::Error::Msg("Invalid merges path".to_string()))?,
+            vocab_path.to_str().ok_or_else(|| {
+                candle_core::Error::Msg("Invalid vocab path".to_string())
+            })?,
+            merges_path.to_str().ok_or_else(|| {
+                candle_core::Error::Msg("Invalid merges path".to_string())
+            })?,
         )
         .build()
-        .map_err(|e| candle_core::Error::Msg(format!("Failed to build BPE tokenizer: {}", e)))?;
+        .map_err(|e| {
+            candle_core::Error::Msg(format!(
+                "Failed to build BPE tokenizer: {}",
+                e
+            ))
+        })?;
 
         // Configure tokenizer with ByteLevel decoder to properly handle GPT-2 BPE
         // byte-to-unicode mapping (e.g., Ġ for space). Without this, subword tokens
@@ -189,10 +226,16 @@ impl Qwen3ASRModel {
         device: &Device,
     ) -> Result<Self> {
         // Load tokenizer from tokenizer.json
-        let tokenizer = Tokenizer::from_file(tokenizer_path)
-            .map_err(|e| candle_core::Error::Msg(format!("Failed to load tokenizer: {}", e)))?;
+        let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(|e| {
+            candle_core::Error::Msg(format!("Failed to load tokenizer: {}", e))
+        })?;
 
-        Self::load_with_tokenizer(config, tokenizer, &[model_path.to_path_buf()], device)
+        Self::load_with_tokenizer(
+            config,
+            tokenizer,
+            &[model_path.to_path_buf()],
+            device,
+        )
     }
 
     /// Load model with a provided tokenizer.
@@ -203,14 +246,20 @@ impl Qwen3ASRModel {
         device: &Device,
     ) -> Result<Self> {
         // Load model weights (supports both single file and sharded weights)
-        let path_refs: Vec<&Path> = model_paths.iter().map(|p: &PathBuf| p.as_path()).collect();
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&path_refs, DType::F32, device)? };
+        let path_refs: Vec<&Path> =
+            model_paths.iter().map(|p: &PathBuf| p.as_path()).collect();
+        let vb = unsafe {
+            VarBuilder::from_mmaped_safetensors(&path_refs, DType::F32, device)?
+        };
 
         // Model uses "thinker" prefix for all weights
         let vb = vb.pp("thinker");
 
         // Initialize audio encoder (weights under "thinker.audio_tower")
-        let audio_encoder = Qwen3AudioEncoder::new(&config.audio_encoder, vb.pp("audio_tower"))?;
+        let audio_encoder = Qwen3AudioEncoder::new(
+            &config.audio_encoder,
+            vb.pp("audio_tower"),
+        )?;
 
         // Initialize decoder with embedding injection support
         let decoder = Qwen3Decoder::new(&config.text_config, vb.clone())?;
@@ -241,10 +290,15 @@ impl Qwen3ASRModel {
 
         // Extract mel spectrogram
         let (mel_data, n_frames, n_mels) = self.mel_extractor.compute_2d(audio);
-        tracing::debug!("Mel spectrogram: {} frames x {} mels", n_frames, n_mels);
+        tracing::debug!(
+            "Mel spectrogram: {} frames x {} mels",
+            n_frames,
+            n_mels
+        );
 
         // Create tensor: (1, n_mels, n_frames)
-        let mel = Tensor::from_vec(mel_data, (1, n_frames, n_mels), &self.device)?;
+        let mel =
+            Tensor::from_vec(mel_data, (1, n_frames, n_mels), &self.device)?;
         let mel = mel.transpose(1, 2)?; // (1, n_mels, n_frames)
         tracing::debug!("Mel tensor shape: {:?}", mel.dims());
 
@@ -273,31 +327,40 @@ impl Qwen3ASRModel {
         let device = audio_features.device().clone();
         let n_audio_frames = audio_features.dim(1)?;
 
-        // ChatML-style prompt format:
-        // <|im_start|>user\n<|audio_start|>[audio]<|audio_end|><|im_end|>\n<|im_start|>assistant\n
+        // ChatML-style prompt format (from chat_template.json):
+        // <|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|>[audio]<|audio_end|><|im_end|>\n<|im_start|>assistant\n
         let im_start_token: u32 = 151644; // <|im_start|>
         let im_end_token: u32 = 151645; // <|im_end|>
         let audio_start_token = self.config.audio_start_token_id; // 151669
         let audio_end_token = self.config.audio_end_token_id; // 151670
 
-        // Encode the prompt tokens - use add_special_tokens=false since we're manually adding special tokens
-        let user_tokens = self
-            .tokenizer
-            .encode("user", false)
-            .map_err(|e| candle_core::Error::Msg(format!("Tokenizer error: {}", e)))?;
-        let assistant_tokens = self
-            .tokenizer
-            .encode("assistant", false)
-            .map_err(|e| candle_core::Error::Msg(format!("Tokenizer error: {}", e)))?;
+        // Encode the prompt tokens
+        let system_tokens =
+            self.tokenizer.encode("system", false).map_err(|e| {
+                candle_core::Error::Msg(format!("Tokenizer error: {}", e))
+            })?;
+        let user_tokens =
+            self.tokenizer.encode("user", false).map_err(|e| {
+                candle_core::Error::Msg(format!("Tokenizer error: {}", e))
+            })?;
+        let assistant_tokens =
+            self.tokenizer.encode("assistant", false).map_err(|e| {
+                candle_core::Error::Msg(format!("Tokenizer error: {}", e))
+            })?;
         let newline_token: u32 = 198; // "Ċ" in GPT-style tokenizers
 
+        tracing::debug!("system tokens: {:?}", system_tokens.get_ids());
         tracing::debug!("user tokens: {:?}", user_tokens.get_ids());
         tracing::debug!("assistant tokens: {:?}", assistant_tokens.get_ids());
 
         // Build the prompt sequence before audio
-        // Format: <|im_start|>user\n<|audio_start|>
-        // Note: No explicit instruction needed - model is trained to transcribe audio automatically
+        // Format: <|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|>
         let mut pre_audio_tokens: Vec<u32> = vec![im_start_token];
+        pre_audio_tokens.extend(system_tokens.get_ids().iter().copied());
+        pre_audio_tokens.push(newline_token);
+        pre_audio_tokens.push(im_end_token);
+        pre_audio_tokens.push(newline_token);
+        pre_audio_tokens.push(im_start_token);
         pre_audio_tokens.extend(user_tokens.get_ids().iter().copied());
         pre_audio_tokens.push(newline_token);
         pre_audio_tokens.push(audio_start_token);
@@ -316,15 +379,19 @@ impl Qwen3ASRModel {
         self.decoder.clear_kv_cache();
 
         // Get embeddings for all prompt parts
-        let pre_tensor = Tensor::new(pre_audio_tokens.as_slice(), &device)?.unsqueeze(0)?;
-        let post_tensor = Tensor::new(post_audio_tokens.as_slice(), &device)?.unsqueeze(0)?;
+        let pre_tensor =
+            Tensor::new(pre_audio_tokens.as_slice(), &device)?.unsqueeze(0)?;
+        let post_tensor =
+            Tensor::new(post_audio_tokens.as_slice(), &device)?.unsqueeze(0)?;
 
         let pre_embed = self.decoder.get_token_embeddings(&pre_tensor)?;
         let post_embed = self.decoder.get_token_embeddings(&post_tensor)?;
 
         // Concatenate: [pre_tokens, audio_features, post_tokens]
-        let combined = Tensor::cat(&[pre_embed, audio_features, post_embed], 1)?;
-        let total_prompt_len = pre_audio_tokens.len() + n_audio_frames + post_audio_tokens.len();
+        let combined =
+            Tensor::cat(&[pre_embed, audio_features, post_embed], 1)?;
+        let total_prompt_len =
+            pre_audio_tokens.len() + n_audio_frames + post_audio_tokens.len();
 
         tracing::debug!("Combined embedding shape: {:?}", combined.dims());
 
@@ -376,7 +443,8 @@ impl Qwen3ASRModel {
             if next_token >= 151643 {
                 tracing::debug!("Skipping special token {}", next_token);
                 // Still update position and continue
-                let next_input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
+                let next_input =
+                    Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
                 logits = self.decoder.forward(&next_input, position)?;
                 position += 1;
                 continue;
@@ -385,7 +453,8 @@ impl Qwen3ASRModel {
             generated_tokens.push(next_token);
 
             // Prepare next input
-            let next_input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
+            let next_input =
+                Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
             logits = self.decoder.forward(&next_input, position)?;
             position += 1;
         }
@@ -397,10 +466,15 @@ impl Qwen3ASRModel {
         );
 
         // Decode tokens to text - ByteLevel decoder handles byte-to-unicode mapping
-        let text = self
-            .tokenizer
-            .decode(&generated_tokens, true)
-            .map_err(|e| candle_core::Error::Msg(format!("Tokenizer decode error: {}", e)))?;
+        let text =
+            self.tokenizer
+                .decode(&generated_tokens, true)
+                .map_err(|e| {
+                    candle_core::Error::Msg(format!(
+                        "Tokenizer decode error: {}",
+                        e
+                    ))
+                })?;
 
         // Normalize whitespace and remove language prefix
         let words: Vec<&str> = text.split_whitespace().collect();

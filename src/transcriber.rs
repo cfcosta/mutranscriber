@@ -117,17 +117,21 @@ impl Transcriber {
     async fn ensure_model(&self) -> TranscriberResult<()> {
         let mut model_guard = self.model.lock().await;
         if model_guard.is_none() {
-            tracing::info!("Loading transcription model (lazy initialization)...");
+            tracing::info!(
+                "Loading transcription model (lazy initialization)..."
+            );
 
             let device = if self.config.use_gpu {
-                Device::cuda_if_available(0).map_err(|e| TranscriberError::Model(e.to_string()))?
+                Device::cuda_if_available(0)
+                    .map_err(|e| TranscriberError::Model(e.to_string()))?
             } else {
                 Device::Cpu
             };
 
-            let model = Qwen3ASRModel::from_pretrained(self.config.variant, &device)
-                .await
-                .map_err(|e| TranscriberError::Model(e.to_string()))?;
+            let model =
+                Qwen3ASRModel::from_pretrained(self.config.variant, &device)
+                    .await
+                    .map_err(|e| TranscriberError::Model(e.to_string()))?;
 
             *model_guard = Some(model);
             tracing::info!("Model loaded successfully");
@@ -142,9 +146,14 @@ impl Transcriber {
     ///
     /// Requires the `gstreamer` feature.
     #[cfg(feature = "gstreamer")]
-    pub async fn transcribe(&self, input_path: &Path) -> TranscriberResult<PathBuf> {
+    pub async fn transcribe(
+        &self,
+        input_path: &Path,
+    ) -> TranscriberResult<PathBuf> {
         if !input_path.exists() {
-            return Err(TranscriberError::FileNotFound(input_path.to_path_buf()));
+            return Err(TranscriberError::FileNotFound(
+                input_path.to_path_buf(),
+            ));
         }
 
         // Extract audio samples
@@ -172,7 +181,10 @@ impl Transcriber {
 
     /// Transcribe an audio or video file (stub when gstreamer is not enabled).
     #[cfg(not(feature = "gstreamer"))]
-    pub async fn transcribe(&self, _input_path: &Path) -> TranscriberResult<PathBuf> {
+    pub async fn transcribe(
+        &self,
+        _input_path: &Path,
+    ) -> TranscriberResult<PathBuf> {
         Err(TranscriberError::GstreamerNotEnabled)
     }
 
@@ -180,7 +192,10 @@ impl Transcriber {
     ///
     /// Input: f32 audio samples at 16kHz
     /// Returns: Transcribed text
-    pub async fn transcribe_audio(&self, audio: &[f32]) -> TranscriberResult<String> {
+    pub async fn transcribe_audio(
+        &self,
+        audio: &[f32],
+    ) -> TranscriberResult<String> {
         self.ensure_model().await?;
 
         let mut model_guard = self.model.lock().await;
@@ -197,19 +212,20 @@ impl Transcriber {
         let sample_rate = self.config.sample_rate;
 
         // Run in blocking task since GStreamer operations are synchronous
-        tokio::task::spawn_blocking(move || extract_audio_sync(&path, sample_rate))
-            .await
-            .map_err(|e| TranscriberError::AudioExtraction(e.to_string()))?
+        tokio::task::spawn_blocking(move || {
+            extract_audio_sync(&path, sample_rate)
+        })
+        .await
+        .map_err(|e| TranscriberError::AudioExtraction(e.to_string()))?
     }
 
     /// Get the transcript output path for an input file.
     #[cfg(any(feature = "gstreamer", test))]
     fn transcript_path(&self, input_path: &Path) -> PathBuf {
-        let output_dir = self
-            .config
-            .output_dir
-            .as_deref()
-            .unwrap_or_else(|| input_path.parent().unwrap_or(Path::new(".")));
+        let output_dir =
+            self.config.output_dir.as_deref().unwrap_or_else(|| {
+                input_path.parent().unwrap_or(Path::new("."))
+            });
 
         let stem = input_path
             .file_stem()
@@ -243,16 +259,19 @@ impl Default for Transcriber {
 
 /// Synchronous audio extraction using GStreamer.
 #[cfg(feature = "gstreamer")]
-fn extract_audio_sync(path: &Path, sample_rate: u32) -> TranscriberResult<Vec<f32>> {
+fn extract_audio_sync(
+    path: &Path,
+    sample_rate: u32,
+) -> TranscriberResult<Vec<f32>> {
     use gstreamer as gst;
     use gstreamer::prelude::*;
     use gstreamer_app as gst_app;
 
     gst::init().map_err(|e| TranscriberError::Gstreamer(e.to_string()))?;
 
-    let path_str = path
-        .to_str()
-        .ok_or_else(|| TranscriberError::AudioExtraction("Invalid path encoding".to_string()))?;
+    let path_str = path.to_str().ok_or_else(|| {
+        TranscriberError::AudioExtraction("Invalid path encoding".to_string())
+    })?;
 
     // Build GStreamer pipeline for audio extraction
     // filesrc -> decodebin -> audioconvert -> audioresample -> appsink
@@ -263,21 +282,24 @@ fn extract_audio_sync(path: &Path, sample_rate: u32) -> TranscriberResult<Vec<f3
     );
 
     let pipeline = gst::parse::launch(&pipeline_str)?;
-    let pipeline = pipeline
-        .dynamic_cast::<gst::Pipeline>()
-        .map_err(|_| TranscriberError::Gstreamer("Failed to cast to Pipeline".to_string()))?;
+    let pipeline = pipeline.dynamic_cast::<gst::Pipeline>().map_err(|_| {
+        TranscriberError::Gstreamer("Failed to cast to Pipeline".to_string())
+    })?;
 
-    let appsink = pipeline
-        .by_name("sink")
-        .ok_or_else(|| TranscriberError::Gstreamer("Failed to find appsink".to_string()))?;
-    let appsink = appsink
-        .dynamic_cast::<gst_app::AppSink>()
-        .map_err(|_| TranscriberError::Gstreamer("Failed to cast to AppSink".to_string()))?;
+    let appsink = pipeline.by_name("sink").ok_or_else(|| {
+        TranscriberError::Gstreamer("Failed to find appsink".to_string())
+    })?;
+    let appsink = appsink.dynamic_cast::<gst_app::AppSink>().map_err(|_| {
+        TranscriberError::Gstreamer("Failed to cast to AppSink".to_string())
+    })?;
 
     // Start pipeline
-    pipeline
-        .set_state(gst::State::Playing)
-        .map_err(|e| TranscriberError::Gstreamer(format!("Failed to start pipeline: {:?}", e)))?;
+    pipeline.set_state(gst::State::Playing).map_err(|e| {
+        TranscriberError::Gstreamer(format!(
+            "Failed to start pipeline: {:?}",
+            e
+        ))
+    })?;
 
     // Collect samples using pull-based API (avoids Arc ownership issues with callbacks)
     let mut samples = Vec::new();
@@ -288,7 +310,11 @@ fn extract_audio_sync(path: &Path, sample_rate: u32) -> TranscriberResult<Vec<f3
                 let bytes = map.as_slice();
                 let float_samples: Vec<f32> = bytes
                     .chunks_exact(4)
-                    .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                    .map(|chunk| {
+                        f32::from_le_bytes([
+                            chunk[0], chunk[1], chunk[2], chunk[3],
+                        ])
+                    })
                     .collect();
                 samples.extend(float_samples);
             }
@@ -310,9 +336,9 @@ fn extract_audio_sync(path: &Path, sample_rate: u32) -> TranscriberResult<Vec<f3
     }
 
     // Stop pipeline
-    pipeline
-        .set_state(gst::State::Null)
-        .map_err(|e| TranscriberError::Gstreamer(format!("Failed to stop pipeline: {:?}", e)))?;
+    pipeline.set_state(gst::State::Null).map_err(|e| {
+        TranscriberError::Gstreamer(format!("Failed to stop pipeline: {:?}", e))
+    })?;
 
     if samples.is_empty() {
         return Err(TranscriberError::AudioExtraction(

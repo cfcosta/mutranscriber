@@ -7,15 +7,15 @@
 
 use candle_core::{Module, Result, Tensor};
 use candle_nn::{
+    conv2d,
+    layer_norm,
+    linear,
     Activation,
     Conv2d,
     Conv2dConfig,
     LayerNorm,
     Linear,
     VarBuilder,
-    conv2d,
-    layer_norm,
-    linear,
 };
 
 use crate::config::AudioEncoderConfig;
@@ -27,7 +27,12 @@ struct ConvBlock {
 }
 
 impl ConvBlock {
-    fn new(in_channels: usize, out_channels: usize, stride: usize, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        in_channels: usize,
+        out_channels: usize,
+        stride: usize,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let config = Conv2dConfig {
             stride,
             padding: 1,
@@ -100,7 +105,8 @@ impl MultiHeadAttention {
         // Scaled dot-product attention
         let attn_weights = q.matmul(&k.transpose(2, 3)?)?;
         let attn_weights = (attn_weights * self.scale)?;
-        let attn_weights = candle_nn::ops::softmax(&attn_weights, candle_core::D::Minus1)?;
+        let attn_weights =
+            candle_nn::ops::softmax(&attn_weights, candle_core::D::Minus1)?;
 
         let attn_output = attn_weights.matmul(&v)?;
 
@@ -156,10 +162,16 @@ impl EncoderLayer {
             config.encoder_attention_heads,
             vb.pp("self_attn"),
         )?;
-        let self_attn_layer_norm = layer_norm(config.d_model, 1e-5, vb.pp("self_attn_layer_norm"))?;
+        let self_attn_layer_norm =
+            layer_norm(config.d_model, 1e-5, vb.pp("self_attn_layer_norm"))?;
         // FFN uses fc1/fc2 directly at layer level, not nested
-        let ffn = FeedForward::new(config.d_model, config.encoder_ffn_dim, vb.clone())?;
-        let final_layer_norm = layer_norm(config.d_model, 1e-5, vb.pp("final_layer_norm"))?;
+        let ffn = FeedForward::new(
+            config.d_model,
+            config.encoder_ffn_dim,
+            vb.clone(),
+        )?;
+        let final_layer_norm =
+            layer_norm(config.d_model, 1e-5, vb.pp("final_layer_norm"))?;
 
         Ok(Self {
             self_attn,
@@ -241,17 +253,26 @@ impl Qwen3AudioEncoder {
         let conv3 = ConvBlock::new(480, 480, 2, vb.pp("conv2d3"))?;
 
         // Linear projection (no bias): 480 * 16 = 7680 -> d_model (896)
-        let conv_out = candle_nn::linear_no_bias(480 * 16, config.d_model, vb.pp("conv_out"))?;
+        let conv_out = candle_nn::linear_no_bias(
+            480 * 16,
+            config.d_model,
+            vb.pp("conv_out"),
+        )?;
 
         // Transformer encoder layers
         let mut layers = Vec::with_capacity(config.encoder_layers);
         for i in 0..config.encoder_layers {
-            let layer = EncoderLayer::new(config, vb.pp(format!("layers.{}", i)))?;
+            let layer =
+                EncoderLayer::new(config, vb.pp(format!("layers.{}", i)))?;
             layers.push(layer);
         }
 
         // Output projection (ln_post, proj1, proj2 are at the root level)
-        let output_proj = OutputProjection::new(config.d_model, config.output_dim, vb.clone())?;
+        let output_proj = OutputProjection::new(
+            config.d_model,
+            config.output_dim,
+            vb.clone(),
+        )?;
 
         Ok(Self {
             conv1,
