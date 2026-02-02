@@ -120,6 +120,10 @@
 
           CUDA_HOME = if pkgs.stdenv.isLinux then "${cuda}" else "";
           CUDA_PATH = if pkgs.stdenv.isLinux then "${cuda}" else "";
+
+          shellHook = ''
+            export LD_LIBRARY_PATH=${cuda}/lib64:${cuda}/lib:$LD_LIBRARY_PATH
+          '';
         };
 
         formatter = formatter;
