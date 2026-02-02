@@ -184,13 +184,10 @@ bd sync           # Export/import/commit
 jj git push       # MANDATORY - THE PLANE IS STILL IN THE AIR UNTIL THIS SUCCEEDS
 jj log -r 'main@origin'  # MUST verify changes are on remote
 
-# 5. Clean up jj state
-jj abandon 'empty()'
-
-# 6. Verify everything is clean and pushed
+# 5. Verify everything is clean and pushed
 jj status
 
-# 7. Choose next work
+# 6. Choose next work
 bd ready --json
 bd show bd-44 --json
 ```
