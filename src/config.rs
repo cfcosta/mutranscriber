@@ -31,22 +31,22 @@ pub struct AudioEncoderConfig {
 }
 
 fn default_d_model() -> usize {
-    1024
+    896 // Actual Qwen3-ASR-0.6B value
 }
 fn default_encoder_layers() -> usize {
-    24
+    18 // Actual Qwen3-ASR-0.6B value
 }
 fn default_encoder_attention_heads() -> usize {
-    16
+    14 // Actual Qwen3-ASR-0.6B value
 }
 fn default_encoder_ffn_dim() -> usize {
-    4096
+    3584 // Actual Qwen3-ASR-0.6B value
 }
 fn default_num_mel_bins() -> usize {
     128
 }
 fn default_output_dim() -> usize {
-    2048
+    1024 // Actual Qwen3-ASR-0.6B value
 }
 
 impl Default for AudioEncoderConfig {

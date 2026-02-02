@@ -170,7 +170,7 @@ impl FFT {
     /// Output is size/2 + 1 magnitudes.
     pub fn magnitude_spectrum(&self, input: &[f32], output: &mut [f32]) {
         assert!(input.len() >= self.size);
-        assert!(output.len() >= self.size / 2 + 1);
+        assert!(output.len() > self.size / 2);
 
         // Allocate complex buffer
         let mut real = vec![0.0f32; self.size];

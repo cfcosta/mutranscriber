@@ -207,8 +207,7 @@ impl Transcriber {
         let output_dir = self
             .config
             .output_dir
-            .as_ref()
-            .map(|p| p.as_path())
+            .as_deref()
             .unwrap_or_else(|| input_path.parent().unwrap_or(Path::new(".")));
 
         let stem = input_path

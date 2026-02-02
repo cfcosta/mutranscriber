@@ -143,11 +143,12 @@ impl FeedForward {
 }
 
 /// Transformer encoder layer with pre-normalization.
+/// Matches Qwen3-ASR tensor naming: self_attn_layer_norm, final_layer_norm
 struct EncoderLayer {
     self_attn: MultiHeadAttention,
     self_attn_layer_norm: LayerNorm,
     ffn: FeedForward,
-    ffn_layer_norm: LayerNorm,
+    final_layer_norm: LayerNorm,
 }
 
 impl EncoderLayer {
@@ -158,14 +159,15 @@ impl EncoderLayer {
             vb.pp("self_attn"),
         )?;
         let self_attn_layer_norm = layer_norm(config.d_model, 1e-5, vb.pp("self_attn_layer_norm"))?;
-        let ffn = FeedForward::new(config.d_model, config.encoder_ffn_dim, vb.pp("ffn"))?;
-        let ffn_layer_norm = layer_norm(config.d_model, 1e-5, vb.pp("ffn_layer_norm"))?;
+        // FFN uses fc1/fc2 directly at layer level, not nested
+        let ffn = FeedForward::new(config.d_model, config.encoder_ffn_dim, vb.clone())?;
+        let final_layer_norm = layer_norm(config.d_model, 1e-5, vb.pp("final_layer_norm"))?;
 
         Ok(Self {
             self_attn,
             self_attn_layer_norm,
             ffn,
-            ffn_layer_norm,
+            final_layer_norm,
         })
     }
 
@@ -178,7 +180,7 @@ impl EncoderLayer {
 
         // Pre-norm FFN with residual
         let residual = x.clone();
-        let x = self.ffn_layer_norm.forward(&x)?;
+        let x = self.final_layer_norm.forward(&x)?;
         let x = self.ffn.forward(&x)?;
         residual + x
     }

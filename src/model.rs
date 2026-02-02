@@ -6,14 +6,15 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::qwen3::ModelForCausalLM as Qwen3LLM;
 use hf_hub::{Repo, RepoType, api::tokio::Api};
-use tokenizers::Tokenizer;
+use tokenizers::{Tokenizer, models::bpe::BPE};
 
 use crate::{audio_encoder::Qwen3AudioEncoder, config::Qwen3ASRConfig, mel::MelSpectrogram};
 
 /// Model variant for Qwen3-ASR.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum ModelVariant {
     /// 0.6B parameter model (~2GB VRAM)
+    #[default]
     Small,
     /// 1.7B parameter model (~4GB VRAM)
     Large,
@@ -34,12 +35,6 @@ impl ModelVariant {
             Self::Small => Qwen3ASRConfig::mutranscriber_0_6b(),
             Self::Large => Qwen3ASRConfig::mutranscriber_1_7b(),
         }
-    }
-}
-
-impl Default for ModelVariant {
-    fn default() -> Self {
-        Self::Small
     }
 }
 
@@ -70,18 +65,56 @@ impl Qwen3ASRModel {
             .get("config.json")
             .await
             .map_err(|e| candle_core::Error::Msg(format!("Failed to get config.json: {}", e)))?;
-        let tokenizer_path = repo
-            .get("tokenizer.json")
+        // Qwen3-ASR uses vocab.json + merges.txt instead of tokenizer.json
+        let vocab_path = repo
+            .get("vocab.json")
             .await
-            .map_err(|e| candle_core::Error::Msg(format!("Failed to get tokenizer.json: {}", e)))?;
+            .map_err(|e| candle_core::Error::Msg(format!("Failed to get vocab.json: {}", e)))?;
+        let merges_path = repo
+            .get("merges.txt")
+            .await
+            .map_err(|e| candle_core::Error::Msg(format!("Failed to get merges.txt: {}", e)))?;
         let model_path = repo.get("model.safetensors").await.map_err(|e| {
             candle_core::Error::Msg(format!("Failed to get model.safetensors: {}", e))
         })?;
 
-        Self::load(config, &config_path, &tokenizer_path, &model_path, device)
+        Self::load_from_parts(
+            config,
+            &config_path,
+            &vocab_path,
+            &merges_path,
+            &model_path,
+            device,
+        )
     }
 
-    /// Load model from local files.
+    /// Load model from local files with separate vocab and merges files.
+    pub fn load_from_parts(
+        config: Qwen3ASRConfig,
+        _config_path: &Path,
+        vocab_path: &Path,
+        merges_path: &Path,
+        model_path: &Path,
+        device: &Device,
+    ) -> Result<Self> {
+        // Build tokenizer from vocab.json and merges.txt (GPT-2 style BPE)
+        let bpe = BPE::from_file(
+            vocab_path
+                .to_str()
+                .ok_or_else(|| candle_core::Error::Msg("Invalid vocab path".to_string()))?,
+            merges_path
+                .to_str()
+                .ok_or_else(|| candle_core::Error::Msg("Invalid merges path".to_string()))?,
+        )
+        .build()
+        .map_err(|e| candle_core::Error::Msg(format!("Failed to build BPE tokenizer: {}", e)))?;
+
+        let tokenizer = Tokenizer::new(bpe);
+
+        Self::load_with_tokenizer(config, tokenizer, model_path, device)
+    }
+
+    /// Load model from local files with a pre-built tokenizer.json.
     pub fn load(
         config: Qwen3ASRConfig,
         _config_path: &Path,
@@ -89,10 +122,20 @@ impl Qwen3ASRModel {
         model_path: &Path,
         device: &Device,
     ) -> Result<Self> {
-        // Load tokenizer
+        // Load tokenizer from tokenizer.json
         let tokenizer = Tokenizer::from_file(tokenizer_path)
             .map_err(|e| candle_core::Error::Msg(format!("Failed to load tokenizer: {}", e)))?;
 
+        Self::load_with_tokenizer(config, tokenizer, model_path, device)
+    }
+
+    /// Load model with a provided tokenizer.
+    fn load_with_tokenizer(
+        config: Qwen3ASRConfig,
+        tokenizer: Tokenizer,
+        model_path: &Path,
+        device: &Device,
+    ) -> Result<Self> {
         // Load model weights
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, device)? };
 
@@ -149,7 +192,7 @@ impl Qwen3ASRModel {
         // are treated as a sequence that replaces the audio tokens
 
         // Create initial token sequence (will be used for proper audio embedding injection)
-        let _tokens = vec![audio_start_token];
+        let _tokens = [audio_start_token];
         let _n_audio_tokens = audio_features.dim(1)?;
 
         // Reset KV cache
