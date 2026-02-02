@@ -5,20 +5,56 @@
 //! - 24-layer Transformer encoder
 //! - Output projection to LLM hidden dimension
 
-use candle_core::{Module, Result, Tensor};
+use candle_core::{DType, Module, Result, Tensor};
 use candle_nn::{
     conv2d,
-    layer_norm,
     linear,
     Activation,
     Conv2d,
     Conv2dConfig,
-    LayerNorm,
     Linear,
     VarBuilder,
 };
 
 use crate::config::AudioEncoderConfig;
+
+/// Layer normalization with CUDA-compatible implementation.
+///
+/// Uses basic tensor operations instead of candle_nn::layer_norm
+/// which lacks CUDA kernel support.
+struct LayerNorm {
+    weight: Tensor,
+    bias: Tensor,
+    eps: f64,
+}
+
+impl LayerNorm {
+    fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        let weight = vb.get(size, "weight")?;
+        let bias = vb.get(size, "bias")?;
+        Ok(Self { weight, bias, eps })
+    }
+
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let dtype = x.dtype();
+        // Compute in f32 for numerical stability
+        let x = x.to_dtype(DType::F32)?;
+
+        // Layer norm: (x - mean) / sqrt(var + eps) * gamma + beta
+        let mean = x.mean_keepdim(candle_core::D::Minus1)?;
+        let x_centered = x.broadcast_sub(&mean)?;
+        let variance =
+            x_centered.sqr()?.mean_keepdim(candle_core::D::Minus1)?;
+        let x_norm =
+            x_centered.broadcast_div(&(variance + self.eps)?.sqrt()?)?;
+
+        // Apply weight and bias, convert back to original dtype
+        x_norm
+            .to_dtype(dtype)?
+            .broadcast_mul(&self.weight)?
+            .broadcast_add(&self.bias)
+    }
+}
 
 /// Convolutional downsampling block.
 struct ConvBlock {
@@ -92,18 +128,22 @@ impl MultiHeadAttention {
         let v = self.v_proj.forward(x)?;
 
         // Reshape to (batch, n_heads, seq_len, head_dim)
+        // Make contiguous after transpose for CUDA matmul compatibility
         let q = q
             .reshape((batch_size, seq_len, self.n_heads, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let k = k
             .reshape((batch_size, seq_len, self.n_heads, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let v = v
             .reshape((batch_size, seq_len, self.n_heads, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
 
         // Scaled dot-product attention
-        let attn_weights = q.matmul(&k.transpose(2, 3)?)?;
+        let attn_weights = q.matmul(&k.transpose(2, 3)?.contiguous()?)?;
         let attn_weights = (attn_weights * self.scale)?;
         let attn_weights =
             candle_nn::ops::softmax(&attn_weights, candle_core::D::Minus1)?;
@@ -111,11 +151,10 @@ impl MultiHeadAttention {
         let attn_output = attn_weights.matmul(&v)?;
 
         // Reshape back to (batch, seq_len, d_model)
-        let attn_output = attn_output.transpose(1, 2)?.reshape((
-            batch_size,
-            seq_len,
-            self.n_heads * self.head_dim,
-        ))?;
+        let attn_output = attn_output
+            .transpose(1, 2)?
+            .contiguous()?
+            .reshape((batch_size, seq_len, self.n_heads * self.head_dim))?;
 
         self.out_proj.forward(&attn_output)
     }
@@ -162,8 +201,11 @@ impl EncoderLayer {
             config.encoder_attention_heads,
             vb.pp("self_attn"),
         )?;
-        let self_attn_layer_norm =
-            layer_norm(config.d_model, 1e-5, vb.pp("self_attn_layer_norm"))?;
+        let self_attn_layer_norm = LayerNorm::new(
+            config.d_model,
+            1e-5,
+            vb.pp("self_attn_layer_norm"),
+        )?;
         // FFN uses fc1/fc2 directly at layer level, not nested
         let ffn = FeedForward::new(
             config.d_model,
@@ -171,7 +213,7 @@ impl EncoderLayer {
             vb.clone(),
         )?;
         let final_layer_norm =
-            layer_norm(config.d_model, 1e-5, vb.pp("final_layer_norm"))?;
+            LayerNorm::new(config.d_model, 1e-5, vb.pp("final_layer_norm"))?;
 
         Ok(Self {
             self_attn,
@@ -206,7 +248,7 @@ struct OutputProjection {
 
 impl OutputProjection {
     fn new(d_model: usize, output_dim: usize, vb: VarBuilder) -> Result<Self> {
-        let ln_post = layer_norm(d_model, 1e-5, vb.pp("ln_post"))?;
+        let ln_post = LayerNorm::new(d_model, 1e-5, vb.pp("ln_post"))?;
         let proj1 = linear(d_model, d_model, vb.pp("proj1"))?;
         let proj2 = linear(d_model, output_dim, vb.pp("proj2"))?;
 

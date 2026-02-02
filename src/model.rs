@@ -365,12 +365,27 @@ impl Qwen3ASRModel {
         pre_audio_tokens.push(newline_token);
         pre_audio_tokens.push(audio_start_token);
 
+        // Encode language hint tokens for priming the model
+        let language_english_tokens = self
+            .tokenizer
+            .encode("language English", false)
+            .map_err(|e| {
+                candle_core::Error::Msg(format!("Tokenizer error: {}", e))
+            })?;
+
+        // ASR text marker token (from tokenizer_config.json)
+        let asr_text_token: u32 = 151704; // <asr_text>
+
         // Build the prompt sequence after audio
-        // Format: <|audio_end|><|im_end|>\n<|im_start|>assistant\n
+        // Format: <|audio_end|><|im_end|>\n<|im_start|>assistant\nlanguage English<asr_text>
+        // Adding explicit language hint and ASR marker to prime the model for English transcription
         let mut post_audio_tokens: Vec<u32> =
             vec![audio_end_token, im_end_token, newline_token, im_start_token];
         post_audio_tokens.extend(assistant_tokens.get_ids().iter().copied());
         post_audio_tokens.push(newline_token);
+        post_audio_tokens
+            .extend(language_english_tokens.get_ids().iter().copied());
+        post_audio_tokens.push(asr_text_token);
 
         tracing::debug!("Pre-audio tokens: {:?}", pre_audio_tokens);
         tracing::debug!("Post-audio tokens: {:?}", post_audio_tokens);
@@ -476,13 +491,14 @@ impl Qwen3ASRModel {
                     ))
                 })?;
 
-        // Normalize whitespace and remove language prefix
+        // Normalize whitespace
+        // Note: We prime the model with "language English<asr_text>" so it should
+        // start generating the transcription directly. If it still outputs a language
+        // prefix, strip it.
         let words: Vec<&str> = text.split_whitespace().collect();
 
-        // Remove "language XYZ" prefix (the model outputs language detection first)
-        // The format is: "language <lang_name> <transcription...>"
         let text = if words.len() >= 2 && words[0] == "language" {
-            // Skip "language" and the language name
+            // Skip any remaining "language <name>" prefix
             words[2..].join(" ")
         } else {
             words.join(" ")

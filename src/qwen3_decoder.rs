@@ -66,11 +66,33 @@ impl RotaryEmbedding {
         let (_, _, seq_len, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?;
         let sin = self.sin.narrow(0, offset, seq_len)?;
-        let q_embed =
-            candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-        let k_embed =
-            candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
+        let q_embed = Self::rope(&q.contiguous()?, &cos, &sin)?;
+        let k_embed = Self::rope(&k.contiguous()?, &cos, &sin)?;
         Ok((q_embed, k_embed))
+    }
+
+    /// CUDA-compatible rotary position embedding using basic tensor ops.
+    fn rope(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+        let (_, _, _, d) = x.dims4()?;
+        let half_d = d / 2;
+
+        // Split into first half and second half
+        let x1 = x.narrow(3, 0, half_d)?;
+        let x2 = x.narrow(3, half_d, half_d)?;
+
+        // Broadcast cos/sin to match tensor shape: (seq, half_d) -> (b, h, seq, half_d)
+        let cos = cos.unsqueeze(0)?.unsqueeze(0)?;
+        let sin = sin.unsqueeze(0)?.unsqueeze(0)?;
+
+        // Apply rotation: [x1, x2] -> [x1*cos - x2*sin, x2*cos + x1*sin]
+        let y1 = x1
+            .broadcast_mul(&cos)?
+            .broadcast_sub(&x2.broadcast_mul(&sin)?)?;
+        let y2 = x2
+            .broadcast_mul(&cos)?
+            .broadcast_add(&x1.broadcast_mul(&sin)?)?;
+
+        Tensor::cat(&[&y1, &y2], 3)
     }
 }
 
