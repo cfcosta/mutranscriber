@@ -486,7 +486,12 @@ mod tests {
                 .filter(|(_, &v)| v > 1e-10)
                 .map(|(i, &v)| (i, v))
                 .collect();
-            eprintln!("Filter {}: {} non-zero bins: {:?}", m, nonzero.len(), nonzero);
+            eprintln!(
+                "Filter {}: {} non-zero bins: {:?}",
+                m,
+                nonzero.len(),
+                nonzero
+            );
         }
 
         // Also check filter 64 (middle)
