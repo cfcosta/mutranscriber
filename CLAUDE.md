@@ -153,12 +153,8 @@ bd sync               # Sync with git
    - If `jj git push` fails, resolve the issue and retry until it succeeds
    - The user is managing multiple agents - unpushed work breaks their coordination workflow
 
-5. **Clean up jj state** - Abandon empty/obsolete changes:
-   ```bash
-   jj abandon 'empty()'              # Remove empty changes
-   ```
-6. **Verify clean state** - Ensure all changes are committed AND PUSHED, no untracked files remain
-7. **Choose a follow-up issue for next session**
+5. **Verify clean state** - Ensure all changes are committed AND PUSHED, no untracked files remain
+6. **Choose a follow-up issue for next session**
    - Provide a prompt for the user to give to you in the next session
    - Format: "Continue work on bd-X: [issue title]. [Brief context about what's been done and what's next]"
 
