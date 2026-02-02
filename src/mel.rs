@@ -42,6 +42,61 @@ impl MelFilters {
     pub fn n_mels(&self) -> usize {
         self.filters.len() / self.n_freqs
     }
+
+    /// Get the raw filter data for a specific mel bin.
+    /// Returns a slice of n_freqs values.
+    pub fn get_filter(&self, mel_bin: usize) -> &[f32] {
+        let start = mel_bin * self.n_freqs;
+        &self.filters[start..start + self.n_freqs]
+    }
+
+    /// Get the number of frequency bins.
+    pub fn n_freqs(&self) -> usize {
+        self.n_freqs
+    }
+
+    /// Dump filterbank info for diagnostic comparison.
+    pub fn dump_diagnostics(&self) -> String {
+        let n_mels = self.filters.len() / self.n_freqs;
+        let mut output = String::new();
+
+        output.push_str(&format!(
+            "Mel filterbank: {} mels x {} freqs\n",
+            n_mels, self.n_freqs
+        ));
+
+        // For each mel bin, find the non-zero range and peak
+        for m in 0..n_mels.min(10) {
+            // First 10 bins for brevity
+            let filter = self.get_filter(m);
+            let mut first_nonzero = None;
+            let mut last_nonzero = 0;
+            let mut peak_idx = 0;
+            let mut peak_val = 0.0f32;
+
+            for (i, &v) in filter.iter().enumerate() {
+                if v > 1e-6 {
+                    if first_nonzero.is_none() {
+                        first_nonzero = Some(i);
+                    }
+                    last_nonzero = i;
+                    if v > peak_val {
+                        peak_val = v;
+                        peak_idx = i;
+                    }
+                }
+            }
+
+            if let Some(first) = first_nonzero {
+                output.push_str(&format!(
+                    "  Mel {}: bins {}..{}, peak at {} = {:.6}\n",
+                    m, first, last_nonzero, peak_idx, peak_val
+                ));
+            }
+        }
+
+        output
+    }
 }
 
 /// Convert frequency to mel scale.
@@ -55,6 +110,7 @@ fn mel_to_hz(mel: f64) -> f64 {
 }
 
 /// Create triangular mel filterbank matrix.
+/// Uses the same approach as librosa and WhisperFeatureExtractor.
 fn create_mel_filterbank(
     n_mels: usize,
     n_fft: usize,
@@ -78,33 +134,36 @@ fn create_mel_filterbank(
     let hz_points: Vec<f64> =
         mel_points.iter().map(|&m| mel_to_hz(m)).collect();
 
-    // Convert Hz to Fft bin indices
-    let bin_points: Vec<usize> = hz_points
+    // Convert Hz to FFT bin indices using floating point for interpolation
+    // This is the key fix: use f64 for bin positions to enable proper interpolation
+    let bin_points: Vec<f64> = hz_points
         .iter()
-        .map(|&f| {
-            ((n_fft as f64 + 1.0) * f / sample_rate as f64).floor() as usize
-        })
+        .map(|&f| (n_fft as f64) * f / sample_rate as f64)
         .collect();
 
-    // Create triangular filters
+    // Create triangular filters using floating point interpolation
+    // This properly handles the case where mel centers are closer together than FFT bins
     for m in 0..n_mels {
         let f_left = bin_points[m];
         let f_center = bin_points[m + 1];
         let f_right = bin_points[m + 2];
 
-        // Rising slope
-        for k in f_left..f_center {
-            if k < n_freqs && f_center > f_left {
-                filters[m * n_freqs + k] =
-                    (k - f_left) as f32 / (f_center - f_left) as f32;
-            }
-        }
+        // Iterate over all FFT bins that could be affected by this filter
+        let k_start = f_left.floor() as usize;
+        let k_end = (f_right.ceil() as usize).min(n_freqs - 1);
 
-        // Falling slope
-        for k in f_center..=f_right {
-            if k < n_freqs && f_right > f_center {
-                filters[m * n_freqs + k] =
-                    (f_right - k) as f32 / (f_right - f_center) as f32;
+        for k in k_start..=k_end {
+            let k_f = k as f64;
+
+            // Rising slope: from f_left to f_center
+            if k_f >= f_left && k_f < f_center && f_center > f_left {
+                let weight = (k_f - f_left) / (f_center - f_left);
+                filters[m * n_freqs + k] = weight as f32;
+            }
+            // Falling slope: from f_center to f_right
+            else if k_f >= f_center && k_f <= f_right && f_right > f_center {
+                let weight = (f_right - k_f) / (f_right - f_center);
+                filters[m * n_freqs + k] = weight as f32;
             }
         }
     }
@@ -407,5 +466,40 @@ mod tests {
 
         let result = mel_spec.compute(&audio);
         assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_mel_filterbank_diagnostics() {
+        let filters = MelFilters::default_128();
+        let diag = filters.dump_diagnostics();
+        eprintln!("{}", diag);
+
+        // Verify basic properties
+        assert_eq!(filters.n_freqs(), N_FFT / 2 + 1); // 201 frequency bins
+
+        // Debug: print first few filters in detail
+        for m in 0..5 {
+            let filter = filters.get_filter(m);
+            let nonzero: Vec<(usize, f32)> = filter
+                .iter()
+                .enumerate()
+                .filter(|(_, &v)| v > 1e-10)
+                .map(|(i, &v)| (i, v))
+                .collect();
+            eprintln!("Filter {}: {} non-zero bins: {:?}", m, nonzero.len(), nonzero);
+        }
+
+        // Also check filter 64 (middle)
+        let filter64 = filters.get_filter(64);
+        let nonzero64: Vec<(usize, f32)> = filter64
+            .iter()
+            .enumerate()
+            .filter(|(_, &v)| v > 1e-10)
+            .map(|(i, &v)| (i, v))
+            .collect();
+        eprintln!("Filter 64: {} non-zero bins", nonzero64.len());
+
+        // Filters should have overlapping triangular shapes
+        // This is a known issue with 128 mels and n_fft=400: low freq filters are sparse
     }
 }
