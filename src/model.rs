@@ -1,6 +1,9 @@
 //! Full Qwen3-ASR model combining audio encoder with Qwen3 LLM decoder.
 
-use std::path::{Path, PathBuf};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::VarBuilder;
@@ -277,6 +280,84 @@ impl Qwen3ASRModel {
         })
     }
 
+    /// Dump diagnostic tensor statistics to a JSON file for comparison with reference.
+    ///
+    /// This helps debug transcription accuracy issues by comparing intermediate
+    /// tensor values with the official Python implementation.
+    fn dump_diagnostics(
+        &self,
+        mel: &Tensor,
+        audio_features: &Tensor,
+        path: &std::path::Path,
+    ) -> Result<()> {
+        let mut file = std::fs::File::create(path).map_err(|e| {
+            candle_core::Error::Msg(format!(
+                "Failed to create diagnostics file: {}",
+                e
+            ))
+        })?;
+
+        // Mel spectrogram statistics
+        let mel_flat = mel.flatten_all()?;
+        let mel_vec = mel_flat.to_vec1::<f32>()?;
+        let mel_mean: f32 = mel_vec.iter().sum::<f32>() / mel_vec.len() as f32;
+        let mel_min = mel_vec.iter().cloned().fold(f32::INFINITY, f32::min);
+        let mel_max = mel_vec.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let mel_std =
+            (mel_vec.iter().map(|x| (x - mel_mean).powi(2)).sum::<f32>()
+                / mel_vec.len() as f32)
+                .sqrt();
+
+        // First frame of mel (for detailed comparison)
+        let mel_first_frame: Vec<f32> = mel
+            .i((0, .., 0))?
+            .to_vec1::<f32>()?
+            .into_iter()
+            .take(16)
+            .collect();
+
+        // Audio features statistics
+        let af_flat = audio_features.flatten_all()?;
+        let af_vec = af_flat.to_vec1::<f32>()?;
+        let af_mean: f32 = af_vec.iter().sum::<f32>() / af_vec.len() as f32;
+        let af_min = af_vec.iter().cloned().fold(f32::INFINITY, f32::min);
+        let af_max = af_vec.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let af_std =
+            (af_vec.iter().map(|x| (x - af_mean).powi(2)).sum::<f32>()
+                / af_vec.len() as f32)
+                .sqrt();
+
+        // First frame of audio features (for detailed comparison)
+        let af_first_frame: Vec<f32> = audio_features
+            .i((0, 0, ..))?
+            .to_vec1::<f32>()?
+            .into_iter()
+            .take(16)
+            .collect();
+
+        // Write JSON
+        writeln!(file, "{{").ok();
+        writeln!(file, "  \"mel_spectrogram\": {{").ok();
+        writeln!(file, "    \"shape\": {:?},", mel.dims()).ok();
+        writeln!(file, "    \"mean\": {:.6},", mel_mean).ok();
+        writeln!(file, "    \"std\": {:.6},", mel_std).ok();
+        writeln!(file, "    \"min\": {:.6},", mel_min).ok();
+        writeln!(file, "    \"max\": {:.6},", mel_max).ok();
+        writeln!(file, "    \"first_frame_16\": {:?}", mel_first_frame).ok();
+        writeln!(file, "  }},").ok();
+        writeln!(file, "  \"audio_features\": {{").ok();
+        writeln!(file, "    \"shape\": {:?},", audio_features.dims()).ok();
+        writeln!(file, "    \"mean\": {:.6},", af_mean).ok();
+        writeln!(file, "    \"std\": {:.6},", af_std).ok();
+        writeln!(file, "    \"min\": {:.6},", af_min).ok();
+        writeln!(file, "    \"max\": {:.6},", af_max).ok();
+        writeln!(file, "    \"first_frame_16\": {:?}", af_first_frame).ok();
+        writeln!(file, "  }}").ok();
+        writeln!(file, "}}").ok();
+
+        Ok(())
+    }
+
     /// Transcribe audio samples to text.
     ///
     /// Input: f32 audio samples at 16kHz
@@ -317,6 +398,16 @@ impl Qwen3ASRModel {
             min,
             max
         );
+
+        // Dump diagnostics if MUTRANSCRIBER_DIAGNOSTICS env var is set
+        if let Ok(diag_path) = std::env::var("MUTRANSCRIBER_DIAGNOSTICS") {
+            self.dump_diagnostics(
+                &mel,
+                &audio_features,
+                std::path::Path::new(&diag_path),
+            )?;
+            eprintln!("Diagnostics written to: {}", diag_path);
+        }
 
         // Generate transcription using LLM
         self.generate(audio_features)
