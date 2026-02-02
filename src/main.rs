@@ -10,9 +10,27 @@
 
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use mutranscriber::{ModelVariant, Transcriber, TranscriberConfig};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+/// Model size option for CLI
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ModelSize {
+    /// 0.6B parameter model (~2GB VRAM)
+    Small,
+    /// 1.7B parameter model (~4GB VRAM)
+    Large,
+}
+
+impl From<ModelSize> for ModelVariant {
+    fn from(size: ModelSize) -> Self {
+        match size {
+            ModelSize::Small => ModelVariant::Small,
+            ModelSize::Large => ModelVariant::Large,
+        }
+    }
+}
 
 /// Transcribe audio files using Qwen3-ASR
 #[derive(Parser, Debug)]
@@ -27,9 +45,9 @@ struct Args {
     #[arg(short, long)]
     output: Option<PathBuf>,
 
-    /// Model variant to use: "small" (0.6B) or "large" (1.7B)
-    #[arg(short, long, default_value = "small")]
-    model: String,
+    /// Model variant to use
+    #[arg(short, long, value_enum, default_value_t = ModelSize::Small)]
+    model: ModelSize,
 
     /// Force CPU mode (disable GPU acceleration)
     #[arg(long)]
@@ -63,11 +81,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    // Parse model variant
-    let variant = match args.model.to_lowercase().as_str() {
-        "large" | "1.7b" => ModelVariant::Large,
-        _ => ModelVariant::Small,
-    };
+    // Convert model size to variant
+    let variant: ModelVariant = args.model.into();
 
     // Build configuration
     let output_dir = args

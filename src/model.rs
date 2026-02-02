@@ -1,6 +1,6 @@
 //! Full Qwen3-ASR model combining audio encoder with Qwen3 LLM decoder.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::VarBuilder;
@@ -64,8 +64,8 @@ impl Qwen3ASRModel {
         let api = Api::new().map_err(|e| candle_core::Error::Msg(format!("HF Hub error: {}", e)))?;
         let repo = api.repo(Repo::new(model_id.to_string(), RepoType::Model));
 
-        // Get model file paths
-        let config_path = repo
+        // Get model file paths (config.json is downloaded but we use built-in config)
+        let _config_path = repo
             .get("config.json")
             .await
             .map_err(|e| candle_core::Error::Msg(format!("Failed to get config.json: {}", e)))?;
@@ -78,18 +78,59 @@ impl Qwen3ASRModel {
             .get("merges.txt")
             .await
             .map_err(|e| candle_core::Error::Msg(format!("Failed to get merges.txt: {}", e)))?;
-        let model_path = repo.get("model.safetensors").await.map_err(|e| {
-            candle_core::Error::Msg(format!("Failed to get model.safetensors: {}", e))
-        })?;
+        // Try single model file first, fall back to sharded weights
+        let model_paths = match repo.get("model.safetensors").await {
+            Ok(path) => vec![path],
+            Err(_) => {
+                // Model uses sharded weights - download the index and all shards
+                tracing::info!("Model uses sharded weights, downloading shards...");
 
-        Self::load_from_parts(
-            config,
-            &config_path,
-            &vocab_path,
-            &merges_path,
-            &model_path,
-            device,
-        )
+                let index_path = repo
+                    .get("model.safetensors.index.json")
+                    .await
+                    .map_err(|e| {
+                        candle_core::Error::Msg(format!(
+                            "Failed to get model.safetensors.index.json: {}",
+                            e
+                        ))
+                    })?;
+
+                // Parse index to get shard filenames
+                let index_content = std::fs::read_to_string(&index_path).map_err(|e| {
+                    candle_core::Error::Msg(format!("Failed to read index file: {}", e))
+                })?;
+                let index: serde_json::Value = serde_json::from_str(&index_content).map_err(|e| {
+                    candle_core::Error::Msg(format!("Failed to parse index JSON: {}", e))
+                })?;
+
+                // Extract unique shard filenames from weight_map
+                let weight_map = index["weight_map"]
+                    .as_object()
+                    .ok_or_else(|| candle_core::Error::Msg("Invalid index format".to_string()))?;
+
+                let mut shard_files: Vec<String> = weight_map
+                    .values()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+                shard_files.sort();
+                shard_files.dedup();
+
+                tracing::info!("Downloading {} shard files...", shard_files.len());
+
+                // Download all shards
+                let mut shard_paths = Vec::with_capacity(shard_files.len());
+                for shard_file in &shard_files {
+                    let shard_path = repo.get(shard_file).await.map_err(|e| {
+                        candle_core::Error::Msg(format!("Failed to get {}: {}", shard_file, e))
+                    })?;
+                    shard_paths.push(shard_path);
+                }
+
+                shard_paths
+            }
+        };
+
+        Self::load_from_paths(config, &vocab_path, &merges_path, &model_paths, device)
     }
 
     /// Load model from local files with separate vocab and merges files.
@@ -99,6 +140,23 @@ impl Qwen3ASRModel {
         vocab_path: &Path,
         merges_path: &Path,
         model_path: &Path,
+        device: &Device,
+    ) -> Result<Self> {
+        Self::load_from_paths(
+            config,
+            vocab_path,
+            merges_path,
+            &[model_path.to_path_buf()],
+            device,
+        )
+    }
+
+    /// Load model from local files with potentially multiple model weight files (sharded).
+    fn load_from_paths(
+        config: Qwen3ASRConfig,
+        vocab_path: &Path,
+        merges_path: &Path,
+        model_paths: &[PathBuf],
         device: &Device,
     ) -> Result<Self> {
         // Build tokenizer from vocab.json and merges.txt (GPT-2 style BPE)
@@ -115,7 +173,7 @@ impl Qwen3ASRModel {
 
         let tokenizer = Tokenizer::new(bpe);
 
-        Self::load_with_tokenizer(config, tokenizer, model_path, device)
+        Self::load_with_tokenizer(config, tokenizer, model_paths, device)
     }
 
     /// Load model from local files with a pre-built tokenizer.json.
@@ -130,18 +188,19 @@ impl Qwen3ASRModel {
         let tokenizer = Tokenizer::from_file(tokenizer_path)
             .map_err(|e| candle_core::Error::Msg(format!("Failed to load tokenizer: {}", e)))?;
 
-        Self::load_with_tokenizer(config, tokenizer, model_path, device)
+        Self::load_with_tokenizer(config, tokenizer, &[model_path.to_path_buf()], device)
     }
 
     /// Load model with a provided tokenizer.
     fn load_with_tokenizer(
         config: Qwen3ASRConfig,
         tokenizer: Tokenizer,
-        model_path: &Path,
+        model_paths: &[PathBuf],
         device: &Device,
     ) -> Result<Self> {
-        // Load model weights
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, device)? };
+        // Load model weights (supports both single file and sharded weights)
+        let path_refs: Vec<&Path> = model_paths.iter().map(|p: &PathBuf| p.as_path()).collect();
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&path_refs, DType::F32, device)? };
 
         // Model uses "thinker" prefix for all weights
         let vb = vb.pp("thinker");
@@ -451,6 +510,7 @@ mod tests {
         assert_eq!(small_config.audio_encoder.d_model, 896);
 
         let large_config = ModelVariant::Large.config();
-        assert_eq!(large_config.audio_encoder.output_dim, 2560);
+        assert_eq!(large_config.audio_encoder.output_dim, 2048);
+        assert_eq!(large_config.audio_encoder.d_model, 1024);
     }
 }

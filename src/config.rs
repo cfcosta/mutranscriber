@@ -207,23 +207,28 @@ impl Qwen3ASRConfig {
     pub fn mutranscriber_1_7b() -> Self {
         Self {
             audio_encoder: AudioEncoderConfig {
-                output_dim: 2560,
-                ..Default::default()
+                d_model: 1024,
+                encoder_layers: 24,
+                encoder_attention_heads: 16,
+                encoder_ffn_dim: 4096,
+                num_mel_bins: 128,
+                output_dim: 2048, // Matches text hidden_size
+                dropout: 0.0,
             },
             text_config: Qwen3Config {
                 vocab_size: 151936,
-                hidden_size: 2560,
-                intermediate_size: 6912,
+                hidden_size: 2048,
+                intermediate_size: 6144,
                 num_hidden_layers: 28,
-                num_attention_heads: 20,
-                num_key_value_heads: 4,
-                max_position_embeddings: 4096,
+                num_attention_heads: 16,
+                num_key_value_heads: 8,
+                max_position_embeddings: 65536,
                 sliding_window: None,
                 max_window_layers: 28,
                 rope_theta: 10000.0,
                 rms_norm_eps: 1e-6,
                 tie_word_embeddings: true,
-                head_dim: 128, // 2560 / 20
+                head_dim: 128, // 2048 / 16
                 attention_bias: false,
                 use_sliding_window: false,
                 hidden_act: Activation::Silu,
