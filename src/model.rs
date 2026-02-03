@@ -745,17 +745,30 @@ impl Qwen3ASRModel {
         Ok(logits.argmax(candle_core::D::Minus1)?.to_vec1::<u32>()?[0])
     }
 
-    /// Apply top-k filtering to logits.
+    /// Apply top-k filtering to logits using partial sort (O(n) instead of O(n log n)).
     fn top_k_filter(&self, logits: &Tensor, k: usize) -> Result<Tensor> {
         let logits_vec = logits.squeeze(0)?.to_vec1::<f32>()?;
+        let n = logits_vec.len();
+        let k = k.min(n);
+
+        // Create indexed vector for partial sorting
         let mut indexed: Vec<(usize, f32)> =
             logits_vec.iter().cloned().enumerate().collect();
-        indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-        let mut filtered = vec![f32::NEG_INFINITY; logits_vec.len()];
-        for (idx, val) in indexed.into_iter().take(k) {
-            filtered[idx] = val;
-        }
+        // Use select_nth_unstable to partition: top k elements will be in [0..k]
+        // This is O(n) instead of O(n log n) for full sort
+        indexed.select_nth_unstable_by(k.saturating_sub(1), |a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Get the threshold (k-th largest value)
+        let threshold = indexed[k.saturating_sub(1)].1;
+
+        // Set all logits below threshold to -inf
+        let filtered: Vec<f32> = logits_vec
+            .iter()
+            .map(|&v| if v >= threshold { v } else { f32::NEG_INFINITY })
+            .collect();
 
         Tensor::from_vec(filtered, logits.dims(), logits.device())
     }
@@ -764,22 +777,38 @@ impl Qwen3ASRModel {
     fn top_p_filter(&self, logits: &Tensor, p: f32) -> Result<Tensor> {
         let probs = candle_nn::ops::softmax(logits, candle_core::D::Minus1)?;
         let probs_vec = probs.squeeze(0)?.to_vec1::<f32>()?;
-
-        let mut indexed: Vec<(usize, f32)> =
-            probs_vec.iter().cloned().enumerate().collect();
-        indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-
-        let mut cumsum = 0.0;
-        let mut filtered = vec![f32::NEG_INFINITY; probs_vec.len()];
         let logits_vec = logits.squeeze(0)?.to_vec1::<f32>()?;
 
-        for (idx, prob) in indexed {
-            if cumsum < p {
-                filtered[idx] = logits_vec[idx];
-                cumsum += prob;
-            } else {
+        // First pass: find candidates with non-negligible probability
+        // This avoids sorting the entire vocabulary
+        let prob_threshold = 1e-6;
+        let mut candidates: Vec<(usize, f32)> = probs_vec
+            .iter()
+            .enumerate()
+            .filter(|(_, &prob)| prob > prob_threshold)
+            .map(|(idx, &prob)| (idx, prob))
+            .collect();
+
+        // Sort only the candidates (typically much smaller than full vocab)
+        candidates.sort_unstable_by(|a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Find which tokens to keep based on cumulative probability
+        let mut cumsum = 0.0;
+        let mut keep_indices = Vec::with_capacity(candidates.len());
+        for (idx, prob) in candidates {
+            keep_indices.push(idx);
+            cumsum += prob;
+            if cumsum >= p {
                 break;
             }
+        }
+
+        // Build filtered logits
+        let mut filtered = vec![f32::NEG_INFINITY; logits_vec.len()];
+        for idx in keep_indices {
+            filtered[idx] = logits_vec[idx];
         }
 
         Tensor::from_vec(filtered, logits.dims(), logits.device())
