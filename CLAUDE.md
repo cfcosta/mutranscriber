@@ -41,6 +41,7 @@ The project uses 80-character line width. See `rustfmt.toml` for full config.
 ## Development Environment
 
 The project uses Nix flakes. Enter the dev environment with:
+
 ```bash
 nix develop    # Or use direnv (auto-activates)
 ```
@@ -61,9 +62,9 @@ Includes: bacon (test watcher), cargo-machete, cargo-nextest, treefmt, GStreamer
 
 ### Model Variants
 
-| Variant | Params | Audio Encoder | Text Decoder |
-|---------|--------|---------------|--------------|
-| Small   | 0.6B   | 896-dim, 18 layers | 1024-dim, 28 layers |
+| Variant | Params | Audio Encoder       | Text Decoder        |
+| ------- | ------ | ------------------- | ------------------- |
+| Small   | 0.6B   | 896-dim, 18 layers  | 1024-dim, 28 layers |
 | Large   | 1.7B   | 1024-dim, 24 layers | 2048-dim, 28 layers |
 
 Models auto-download from HuggingFace (`Qwen/Qwen3-ASR-0.6B`, `Qwen/Qwen3-ASR-1.7B`).
@@ -125,6 +126,7 @@ bd sync               # Sync with git
    - File P0 issues if quality gates are broken
 3. **Update beads issues** - close finished work, update status
 4. **PUSH TO REMOTE - NON-NEGOTIABLE** - This step is MANDATORY. Execute ALL commands below:
+
    ```bash
    # Fetch and rebase to catch any remote changes
    jj git fetch

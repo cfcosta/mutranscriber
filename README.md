@@ -90,8 +90,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Model Variants
 
-| Variant | Parameters | VRAM | HuggingFace ID |
-|---------|------------|------|----------------|
+| Variant | Parameters | VRAM | HuggingFace ID        |
+| ------- | ---------- | ---- | --------------------- |
 | Small   | 0.6B       | ~2GB | `Qwen/Qwen3-ASR-0.6B` |
 | Large   | 1.7B       | ~4GB | `Qwen/Qwen3-ASR-1.7B` |
 
@@ -107,11 +107,11 @@ When using the `gstreamer` feature, audio is automatically extracted and resampl
 
 ## Build Features
 
-| Feature | Description | Default |
-|---------|-------------|---------|
-| `gstreamer` | Audio extraction from video/audio files | Yes |
-| `cuda` | NVIDIA GPU acceleration | No |
-| `metal` | Apple Metal GPU acceleration | No |
+| Feature     | Description                             | Default |
+| ----------- | --------------------------------------- | ------- |
+| `gstreamer` | Audio extraction from video/audio files | Yes     |
+| `cuda`      | NVIDIA GPU acceleration                 | No      |
+| `metal`     | Apple Metal GPU acceleration            | No      |
 
 ## Development
 

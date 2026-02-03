@@ -6,13 +6,13 @@
 use std::path::PathBuf;
 
 use mutranscriber::{
+    HOP_LENGTH,
     MelSpectrogram,
     ModelVariant,
-    Transcriber,
-    TranscriberConfig,
-    HOP_LENGTH,
     N_MELS,
     SAMPLE_RATE,
+    Transcriber,
+    TranscriberConfig,
 };
 
 /// Path to the test audio fixture.

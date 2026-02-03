@@ -128,10 +128,103 @@
 
         formatter = formatter;
 
-        packages.default = rustPlatform.buildRustPackage {
-          name = "mutranscriber";
-          src = ./.;
-          cargoLock.lockFile = ./Cargo.lock;
+        packages = {
+          # CPU-only build (default)
+          mutranscriber-cpu = rustPlatform.buildRustPackage {
+            pname = "mutranscriber";
+            version = "0.1.0";
+            src = ./.;
+            cargoLock.lockFile = ./Cargo.lock;
+
+            # Skip tests during Nix build (integration tests require model download)
+            doCheck = false;
+
+            nativeBuildInputs = [
+              pkgs.pkg-config
+              pkgs.makeWrapper
+            ];
+            buildInputs = [
+              pkgs.gst_all_1.gstreamer
+              pkgs.gst_all_1.gst-plugins-base
+              pkgs.gst_all_1.gst-plugins-good
+              pkgs.gst_all_1.gst-plugins-bad
+              pkgs.gst_all_1.gst-plugins-ugly
+              pkgs.gst_all_1.gst-libav
+            ];
+
+            # GStreamer plugin path for runtime
+            postInstall = ''
+              wrapProgram $out/bin/mutranscriber \
+                --prefix GST_PLUGIN_PATH : "${pkgs.gst_all_1.gstreamer}/lib/gstreamer-1.0" \
+                --prefix GST_PLUGIN_PATH : "${pkgs.gst_all_1.gst-plugins-base}/lib/gstreamer-1.0" \
+                --prefix GST_PLUGIN_PATH : "${pkgs.gst_all_1.gst-plugins-good}/lib/gstreamer-1.0" \
+                --prefix GST_PLUGIN_PATH : "${pkgs.gst_all_1.gst-plugins-bad}/lib/gstreamer-1.0" \
+                --prefix GST_PLUGIN_PATH : "${pkgs.gst_all_1.gst-plugins-ugly}/lib/gstreamer-1.0" \
+                --prefix GST_PLUGIN_PATH : "${pkgs.gst_all_1.gst-libav}/lib/gstreamer-1.0"
+            '';
+
+            meta = {
+              description = "Audio transcription using Qwen3-ASR";
+              license = pkgs.lib.licenses.mit;
+            };
+          };
+
+          # CUDA-enabled build
+          mutranscriber-cuda = rustPlatform.buildRustPackage {
+            pname = "mutranscriber-cuda";
+            version = "0.1.0";
+            src = ./.;
+            cargoLock.lockFile = ./Cargo.lock;
+
+            # Skip tests during Nix build
+            doCheck = false;
+
+            nativeBuildInputs = [
+              pkgs.pkg-config
+              pkgs.makeWrapper
+              pkgs.cudaPackages.cuda_nvcc
+            ];
+            buildInputs = [
+              cuda
+              pkgs.gst_all_1.gstreamer
+              pkgs.gst_all_1.gst-plugins-base
+              pkgs.gst_all_1.gst-plugins-good
+              pkgs.gst_all_1.gst-plugins-bad
+              pkgs.gst_all_1.gst-plugins-ugly
+              pkgs.gst_all_1.gst-libav
+            ];
+
+            # Enable CUDA feature
+            buildFeatures = [ "cuda" ];
+
+            CUDA_HOME = "${cuda}";
+            CUDA_PATH = "${cuda}";
+            CUDA_ROOT = "${cuda}";
+
+            # Set CUDA compute capability to skip nvidia-smi detection in sandbox
+            # Default to 8.6 (Ampere/RTX 30 series). Override with CUDA_COMPUTE_CAP env var if needed.
+            CUDA_COMPUTE_CAP = "86";
+
+            # Wrap binary with proper library paths for CUDA driver
+            postInstall = ''
+              wrapProgram $out/bin/mutranscriber \
+                --prefix LD_LIBRARY_PATH : "/run/opengl-driver/lib" \
+                --prefix LD_LIBRARY_PATH : "${cuda}/lib" \
+                --prefix LD_LIBRARY_PATH : "${cuda}/lib64" \
+                --prefix GST_PLUGIN_PATH : "${pkgs.gst_all_1.gstreamer}/lib/gstreamer-1.0" \
+                --prefix GST_PLUGIN_PATH : "${pkgs.gst_all_1.gst-plugins-base}/lib/gstreamer-1.0" \
+                --prefix GST_PLUGIN_PATH : "${pkgs.gst_all_1.gst-plugins-good}/lib/gstreamer-1.0" \
+                --prefix GST_PLUGIN_PATH : "${pkgs.gst_all_1.gst-plugins-bad}/lib/gstreamer-1.0" \
+                --prefix GST_PLUGIN_PATH : "${pkgs.gst_all_1.gst-plugins-ugly}/lib/gstreamer-1.0" \
+                --prefix GST_PLUGIN_PATH : "${pkgs.gst_all_1.gst-libav}/lib/gstreamer-1.0"
+            '';
+
+            meta = {
+              description = "Audio transcription using Qwen3-ASR (CUDA-enabled)";
+              license = pkgs.lib.licenses.mit;
+            };
+          };
+
         };
       }
     );

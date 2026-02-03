@@ -7,16 +7,16 @@ use std::{
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::VarBuilder;
-use hf_hub::{api::tokio::Api, Repo, RepoType};
+use hf_hub::{Repo, RepoType, api::tokio::Api};
 use tokenizers::{
+    Tokenizer,
     models::bpe::BPE,
     pre_tokenizers::byte_level::ByteLevel,
-    Tokenizer,
 };
 
 use crate::{
     audio_encoder::Qwen3AudioEncoder,
-    config::{special_tokens, Qwen3ASRConfig},
+    config::{Qwen3ASRConfig, special_tokens},
     mel::MelSpectrogram,
     qwen3_decoder::Qwen3Decoder,
 };

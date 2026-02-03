@@ -6,6 +6,7 @@ tensor values with the official Python implementation.
 ## Purpose
 
 The transcription accuracy issues may stem from differences in:
+
 1. Mel spectrogram computation
 2. Audio encoder processing
 3. Numerical precision or normalization
@@ -67,10 +68,10 @@ Both scripts generate JSON with the following structure:
 
 ## Current Rust Values (test_audio.wav)
 
-| Tensor | Shape | Mean | Std | Min | Max |
-|--------|-------|------|-----|-----|-----|
-| Mel Spectrogram | [1, 128, 998] | -0.185 | 0.419 | -0.638 | 1.362 |
-| Audio Features | [1, 125, 1024] | 0.001 | 0.016 | -0.112 | 0.101 |
+| Tensor          | Shape          | Mean   | Std   | Min    | Max   |
+| --------------- | -------------- | ------ | ----- | ------ | ----- |
+| Mel Spectrogram | [1, 128, 998]  | -0.185 | 0.419 | -0.638 | 1.362 |
+| Audio Features  | [1, 125, 1024] | 0.001  | 0.016 | -0.112 | 0.101 |
 
 ## Interpretation
 
@@ -79,11 +80,13 @@ Both scripts generate JSON with the following structure:
 - **DIFFER** (diff >= 0.1): Significant difference, investigate further
 
 If mel spectrogram values differ significantly, check:
+
 - FFT window function
 - Mel filterbank construction
 - Log normalization
 
 If audio features differ with similar mel input, check:
+
 - Conv2D layer weights
 - Layer normalization implementation
 - Attention computation

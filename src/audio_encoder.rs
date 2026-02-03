@@ -8,13 +8,13 @@
 
 use candle_core::{DType, Device, Module, Result, Tensor};
 use candle_nn::{
-    conv2d,
-    linear,
     Activation,
     Conv2d,
     Conv2dConfig,
     Linear,
     VarBuilder,
+    conv2d,
+    linear,
 };
 
 use crate::config::AudioEncoderConfig;
@@ -474,7 +474,8 @@ mod tests {
         assert_eq!(output.dims(), &[1, seq_len, channels]);
 
         // Verify values are in reasonable range (sin/cos are bounded by [-1, 1])
-        let output_vec = output.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let output_vec =
+            output.flatten_all().unwrap().to_vec1::<f32>().unwrap();
         for val in &output_vec {
             assert!(
                 *val >= -1.0 && *val <= 1.0,
@@ -485,7 +486,8 @@ mod tests {
 
         // First position should have sin(0)=0 for first half, cos(0)=1 for second half
         let first_pos = pos_embed.forward(1).unwrap();
-        let first_vec = first_pos.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let first_vec =
+            first_pos.flatten_all().unwrap().to_vec1::<f32>().unwrap();
         // sin(0) = 0 for the first element
         assert!(
             first_vec[0].abs() < 1e-5,
