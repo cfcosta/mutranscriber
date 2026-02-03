@@ -2,10 +2,11 @@
 //!
 //! This module implements the audio encoder consisting of:
 //! - Conv2D downsampling stack (8x total downsampling)
-//! - 24-layer Transformer encoder
+//! - Sinusoidal positional embeddings
+//! - Transformer encoder layers
 //! - Output projection to LLM hidden dimension
 
-use candle_core::{DType, Module, Result, Tensor};
+use candle_core::{DType, Device, Module, Result, Tensor};
 use candle_nn::{
     conv2d,
     linear,
@@ -53,6 +54,70 @@ impl LayerNorm {
             .to_dtype(dtype)?
             .broadcast_mul(&self.weight)?
             .broadcast_add(&self.bias)
+    }
+}
+
+/// Sinusoidal positional embeddings for audio features.
+///
+/// Matches the Python implementation in modeling_qwen3_asr.py:
+/// - Uses sin/cos patterns with exponentially spaced frequencies
+/// - max_timescale=10000 following the original Transformer paper
+struct SinusoidalPositionEmbedding {
+    embedding: Tensor,
+}
+
+impl SinusoidalPositionEmbedding {
+    /// Create sinusoidal positional embeddings.
+    ///
+    /// Arguments:
+    /// - length: Maximum sequence length (max_source_positions)
+    /// - channels: Embedding dimension (d_model)
+    /// - device: Device to create tensors on
+    fn new(length: usize, channels: usize, device: &Device) -> Result<Self> {
+        let max_timescale: f64 = 10000.0;
+        let half_channels = channels / 2;
+
+        // Compute inverse timescales: exp(-log(max_timescale) * i / (channels/2 - 1))
+        let log_timescale_increment =
+            max_timescale.ln() / (half_channels - 1) as f64;
+        let inv_timescales: Vec<f32> = (0..half_channels)
+            .map(|i| (-log_timescale_increment * i as f64).exp() as f32)
+            .collect();
+
+        // Create position indices [0, 1, 2, ..., length-1]
+        let positions: Vec<f32> = (0..length).map(|i| i as f32).collect();
+
+        // Compute scaled_time: positions[:, None] * inv_timescales[None, :]
+        // Shape: (length, half_channels)
+        let mut scaled_time = vec![0.0f32; length * half_channels];
+        for (i, &pos) in positions.iter().enumerate() {
+            for (j, &inv_ts) in inv_timescales.iter().enumerate() {
+                scaled_time[i * half_channels + j] = pos * inv_ts;
+            }
+        }
+
+        // Compute sin and cos, then concatenate: [sin(scaled_time), cos(scaled_time)]
+        // Shape: (length, channels)
+        let mut embedding = vec![0.0f32; length * channels];
+        for i in 0..length {
+            for j in 0..half_channels {
+                let val = scaled_time[i * half_channels + j];
+                embedding[i * channels + j] = val.sin();
+                embedding[i * channels + half_channels + j] = val.cos();
+            }
+        }
+
+        let embedding =
+            Tensor::from_vec(embedding, (length, channels), device)?;
+
+        Ok(Self { embedding })
+    }
+
+    /// Get positional embeddings for a given sequence length.
+    ///
+    /// Returns shape (1, seq_len, channels) for broadcasting with input.
+    fn forward(&self, seq_len: usize) -> Result<Tensor> {
+        self.embedding.narrow(0, 0, seq_len)?.unsqueeze(0)
     }
 }
 
@@ -273,13 +338,15 @@ impl OutputProjection {
 /// Architecture:
 /// 1. Conv2D downsampling: (batch, 1, mel_bins, time) -> (batch, 480, mel_bins/8, time/8)
 /// 2. Linear projection: flatten and project to d_model
-/// 3. 18 Transformer encoder layers
-/// 4. Output projection to LLM dimension
+/// 3. Add sinusoidal positional embeddings
+/// 4. Transformer encoder layers
+/// 5. Output projection to LLM dimension
 pub struct Qwen3AudioEncoder {
     conv1: ConvBlock,
     conv2: ConvBlock,
     conv3: ConvBlock,
-    conv_out: Linear, // Linear projection after conv, not Conv2d
+    conv_out: Linear,
+    positional_embedding: SinusoidalPositionEmbedding,
     layers: Vec<EncoderLayer>,
     output_proj: OutputProjection,
 }
@@ -299,6 +366,13 @@ impl Qwen3AudioEncoder {
             480 * 16,
             config.d_model,
             vb.pp("conv_out"),
+        )?;
+
+        // Sinusoidal positional embeddings (computed, not learned)
+        let positional_embedding = SinusoidalPositionEmbedding::new(
+            config.max_source_positions,
+            config.d_model,
+            vb.device(),
         )?;
 
         // Transformer encoder layers
@@ -321,6 +395,7 @@ impl Qwen3AudioEncoder {
             conv2,
             conv3,
             conv_out,
+            positional_embedding,
             layers,
             output_proj,
         })
@@ -351,6 +426,13 @@ impl Qwen3AudioEncoder {
         // Linear projection to d_model
         let x = self.conv_out.forward(&x)?; // (batch, time/8, d_model)
 
+        // Add sinusoidal positional embeddings
+        let pos_embed = self
+            .positional_embedding
+            .forward(time_dim)?
+            .to_dtype(x.dtype())?;
+        let x = x.broadcast_add(&pos_embed)?;
+
         // Transformer encoder layers
         let mut x = x;
         for layer in &self.layers {
@@ -373,5 +455,48 @@ mod tests {
         assert_eq!(config.encoder_layers, 18);
         assert_eq!(config.num_mel_bins, 128);
         assert_eq!(config.output_dim, 1024);
+        assert_eq!(config.max_source_positions, 1500);
+    }
+
+    #[test]
+    fn test_sinusoidal_position_embedding() {
+        let device = Device::Cpu;
+        let length = 100;
+        let channels = 64;
+
+        let pos_embed =
+            SinusoidalPositionEmbedding::new(length, channels, &device)
+                .unwrap();
+
+        // Test forward pass
+        let seq_len = 50;
+        let output = pos_embed.forward(seq_len).unwrap();
+        assert_eq!(output.dims(), &[1, seq_len, channels]);
+
+        // Verify values are in reasonable range (sin/cos are bounded by [-1, 1])
+        let output_vec = output.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        for val in &output_vec {
+            assert!(
+                *val >= -1.0 && *val <= 1.0,
+                "Position embedding value {} out of range",
+                val
+            );
+        }
+
+        // First position should have sin(0)=0 for first half, cos(0)=1 for second half
+        let first_pos = pos_embed.forward(1).unwrap();
+        let first_vec = first_pos.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        // sin(0) = 0 for the first element
+        assert!(
+            first_vec[0].abs() < 1e-5,
+            "sin(0) should be ~0, got {}",
+            first_vec[0]
+        );
+        // cos(0) = 1 for the element at half_channels
+        assert!(
+            (first_vec[channels / 2] - 1.0).abs() < 1e-5,
+            "cos(0) should be ~1, got {}",
+            first_vec[channels / 2]
+        );
     }
 }

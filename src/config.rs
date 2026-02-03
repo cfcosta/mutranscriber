@@ -60,6 +60,9 @@ pub struct AudioEncoderConfig {
     /// Output dimension to LLM (default: 2048)
     #[serde(default = "default_output_dim")]
     pub output_dim: usize,
+    /// Maximum source positions for positional embeddings (default: 1500)
+    #[serde(default = "default_max_source_positions")]
+    pub max_source_positions: usize,
     /// Dropout rate (default: 0.0)
     #[serde(default)]
     pub dropout: f64,
@@ -83,6 +86,9 @@ fn default_num_mel_bins() -> usize {
 fn default_output_dim() -> usize {
     1024 // Actual Qwen3-ASR-0.6B value
 }
+fn default_max_source_positions() -> usize {
+    1500 // From HuggingFace config
+}
 
 impl Default for AudioEncoderConfig {
     fn default() -> Self {
@@ -93,6 +99,7 @@ impl Default for AudioEncoderConfig {
             encoder_ffn_dim: default_encoder_ffn_dim(),
             num_mel_bins: default_num_mel_bins(),
             output_dim: default_output_dim(),
+            max_source_positions: default_max_source_positions(),
             dropout: 0.0,
         }
     }
@@ -248,6 +255,7 @@ impl Qwen3ASRConfig {
                 encoder_ffn_dim: 4096,
                 num_mel_bins: 128,
                 output_dim: 2048, // Matches text hidden_size
+                max_source_positions: 1500,
                 dropout: 0.0,
             },
             text_config: Qwen3Config {
