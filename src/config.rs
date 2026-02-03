@@ -4,6 +4,41 @@ use candle_nn::Activation;
 use candle_transformers::models::qwen3::Config as Qwen3Config;
 use serde::Deserialize;
 
+/// Special token IDs for Qwen3-ASR models.
+///
+/// These tokens are defined in the tokenizer_config.json from HuggingFace.
+/// All special tokens have IDs >= 151643 (ENDOFTEXT).
+pub mod special_tokens {
+    // ChatML tokens
+    /// `<|endoftext|>` - End of text / padding token
+    pub const ENDOFTEXT: u32 = 151643;
+    /// `<|im_start|>` - ChatML message start
+    pub const IM_START: u32 = 151644;
+    /// `<|im_end|>` - ChatML message end (also used as EOS)
+    pub const IM_END: u32 = 151645;
+
+    // Audio tokens
+    /// `<|audio_start|>` - Audio segment start marker
+    pub const AUDIO_START: u32 = 151669;
+    /// `<|audio_end|>` - Audio segment end marker
+    pub const AUDIO_END: u32 = 151670;
+    /// `<|audio_pad|>` - Placeholder replaced by audio embeddings
+    pub const AUDIO_PAD: u32 = 151676;
+
+    // ASR-specific tokens
+    /// `<non_speech>` - Marks non-speech audio content
+    pub const NON_SPEECH: u32 = 151675;
+    /// `<asr_text>` - ASR task marker, signals start of transcription output
+    pub const ASR_TEXT: u32 = 151704;
+
+    // Text formatting
+    /// Newline token (GPT-2 style "Ċ")
+    pub const NEWLINE: u32 = 198;
+
+    /// First special token ID (all tokens >= this are special)
+    pub const FIRST_SPECIAL: u32 = ENDOFTEXT;
+}
+
 /// Audio encoder configuration (AuT - Audio Transformer).
 #[derive(Debug, Clone, Deserialize)]
 pub struct AudioEncoderConfig {

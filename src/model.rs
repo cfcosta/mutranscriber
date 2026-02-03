@@ -16,7 +16,7 @@ use tokenizers::{
 
 use crate::{
     audio_encoder::Qwen3AudioEncoder,
-    config::Qwen3ASRConfig,
+    config::{special_tokens, Qwen3ASRConfig},
     mel::MelSpectrogram,
     qwen3_decoder::Qwen3Decoder,
 };
@@ -451,10 +451,10 @@ impl Qwen3ASRModel {
 
         // ChatML-style prompt format (from chat_template.json):
         // <|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|>[audio]<|audio_end|><|im_end|>\n<|im_start|>assistant\n
-        let im_start_token: u32 = 151644; // <|im_start|>
-        let im_end_token: u32 = 151645; // <|im_end|>
-        let audio_start_token = self.config.audio_start_token_id; // 151669
-        let audio_end_token = self.config.audio_end_token_id; // 151670
+        let im_start_token = special_tokens::IM_START;
+        let im_end_token = special_tokens::IM_END;
+        let audio_start_token = special_tokens::AUDIO_START;
+        let audio_end_token = special_tokens::AUDIO_END;
 
         // Encode the prompt tokens
         let system_tokens =
@@ -469,7 +469,7 @@ impl Qwen3ASRModel {
             self.tokenizer.encode("assistant", false).map_err(|e| {
                 candle_core::Error::Msg(format!("Tokenizer error: {}", e))
             })?;
-        let newline_token: u32 = 198; // "Ċ" in GPT-style tokenizers
+        let newline_token = special_tokens::NEWLINE;
 
         tracing::debug!("system tokens: {:?}", system_tokens.get_ids());
         tracing::debug!("user tokens: {:?}", user_tokens.get_ids());
@@ -495,8 +495,8 @@ impl Qwen3ASRModel {
                 candle_core::Error::Msg(format!("Tokenizer error: {}", e))
             })?;
 
-        // ASR text marker token (from tokenizer_config.json)
-        let asr_text_token: u32 = 151704; // <asr_text>
+        // ASR text marker token signals start of transcription output
+        let asr_text_token = special_tokens::ASR_TEXT;
 
         // Build the prompt sequence after audio
         // Format: <|audio_end|><|im_end|>\n<|im_start|>assistant\nlanguage English<asr_text>
