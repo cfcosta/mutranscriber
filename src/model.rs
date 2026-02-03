@@ -673,6 +673,18 @@ impl Qwen3ASRModel {
     ) -> Result<u32> {
         let gen_config = &self.generation_config;
 
+        // Fast path: greedy decoding without repetition penalty
+        // Avoids cloning the logits tensor entirely
+        if gen_config.temperature.is_none()
+            && (gen_config.repetition_penalty.is_none()
+                || gen_config.repetition_penalty == Some(1.0)
+                || generated_tokens.is_empty())
+        {
+            let token =
+                logits.argmax(candle_core::D::Minus1)?.to_vec1::<u32>()?[0];
+            return Ok(token);
+        }
+
         // Apply repetition penalty if configured
         let logits = if let Some(penalty) = gen_config.repetition_penalty {
             if penalty != 1.0 && !generated_tokens.is_empty() {
@@ -695,7 +707,7 @@ impl Qwen3ASRModel {
             logits.clone()
         };
 
-        // Greedy decoding (no temperature)
+        // Greedy decoding (no temperature) - with repetition penalty applied
         if gen_config.temperature.is_none() {
             let token =
                 logits.argmax(candle_core::D::Minus1)?.to_vec1::<u32>()?[0];
