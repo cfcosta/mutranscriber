@@ -219,7 +219,7 @@ impl Attention {
         // Apply rotary embeddings
         let (q, k) = self.rotary.apply(&q, &k, offset)?;
 
-        // KV cache
+        // KV cache - store first, then borrow for GQA to avoid unnecessary clones
         let (k, v) = if let Some((prev_k, prev_v)) = &self.kv_cache {
             let k = Tensor::cat(&[prev_k, &k], 2)?;
             let v = Tensor::cat(&[prev_v, &v], 2)?;
@@ -227,31 +227,30 @@ impl Attention {
         } else {
             (k, v)
         };
-        self.kv_cache = Some((k.clone(), v.clone()));
+        self.kv_cache = Some((k, v));
+
+        // Borrow from cache for GQA expansion (avoids clone when num_groups > 1)
+        let (k_cache, v_cache) = self.kv_cache.as_ref().unwrap();
 
         // Repeat KV for GQA
         let num_groups = self.num_heads / self.num_kv_heads;
         let k = if num_groups > 1 {
-            let (b, h, s, d) = k.dims4()?;
-            k.unsqueeze(2)?.expand((b, h, num_groups, s, d))?.reshape((
-                b,
-                h * num_groups,
-                s,
-                d,
-            ))?
+            let (b, h, s, d) = k_cache.dims4()?;
+            k_cache
+                .unsqueeze(2)?
+                .expand((b, h, num_groups, s, d))?
+                .reshape((b, h * num_groups, s, d))?
         } else {
-            k
+            k_cache.clone()
         };
         let v = if num_groups > 1 {
-            let (b, h, s, d) = v.dims4()?;
-            v.unsqueeze(2)?.expand((b, h, num_groups, s, d))?.reshape((
-                b,
-                h * num_groups,
-                s,
-                d,
-            ))?
+            let (b, h, s, d) = v_cache.dims4()?;
+            v_cache
+                .unsqueeze(2)?
+                .expand((b, h, num_groups, s, d))?
+                .reshape((b, h * num_groups, s, d))?
         } else {
-            v
+            v_cache.clone()
         };
 
         // Scaled dot-product attention
