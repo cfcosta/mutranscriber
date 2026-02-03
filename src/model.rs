@@ -425,19 +425,9 @@ impl Qwen3ASRModel {
         }
         tracing::debug!("Audio features shape: {:?}", af_dims);
 
-        // Check audio features stats
-        let features_flat = audio_features.flatten_all()?;
-        let mean = features_flat.mean(0)?.to_scalar::<f32>()?;
-        let min = features_flat.min(0)?.to_scalar::<f32>()?;
-        let max = features_flat.max(0)?.to_scalar::<f32>()?;
-        tracing::debug!(
-            "Audio features stats - mean: {:.4}, min: {:.4}, max: {:.4}",
-            mean,
-            min,
-            max
-        );
-
         // Dump diagnostics if MUTRANSCRIBER_DIAGNOSTICS env var is set
+        // Note: Stats computation (mean/min/max) removed to avoid GPU-CPU sync.
+        // Use MUTRANSCRIBER_DIAGNOSTICS for detailed debugging instead.
         if let Ok(diag_path) = std::env::var("MUTRANSCRIBER_DIAGNOSTICS") {
             self.dump_diagnostics(
                 &mel,
