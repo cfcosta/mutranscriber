@@ -35,7 +35,7 @@ gstreamer-app = { version = "0.24", optional = true }
 # CLI dependencies (optional)
 
 [features]
-default = []
+default = ["gstreamer"]
 gstreamer = ["dep:gstreamer", "dep:gstreamer-app"]
 cuda = ["candle-core/cuda"]
 metal = ["candle-core/metal"]
