@@ -385,7 +385,23 @@ impl Qwen3ASRModel {
 
         // Encode audio
         let audio_features = self.audio_encoder.forward(&mel)?;
-        tracing::debug!("Audio features shape: {:?}", audio_features.dims());
+
+        // Validate audio features shape: should be (batch, seq, hidden_size)
+        let af_dims = audio_features.dims();
+        if af_dims.len() != 3 {
+            return Err(candle_core::Error::Msg(format!(
+                "Expected 3D audio features, got shape {:?}",
+                af_dims
+            )));
+        }
+        let expected_hidden = self.config.audio_encoder.output_dim;
+        if af_dims[2] != expected_hidden {
+            return Err(candle_core::Error::Msg(format!(
+                "Audio features hidden size mismatch: got {}, expected {}",
+                af_dims[2], expected_hidden
+            )));
+        }
+        tracing::debug!("Audio features shape: {:?}", af_dims);
 
         // Check audio features stats
         let features_flat = audio_features.flatten_all()?;
@@ -493,6 +509,19 @@ impl Qwen3ASRModel {
         let pre_embed = self.decoder.get_token_embeddings(&pre_tensor)?;
         let post_embed = self.decoder.get_token_embeddings(&post_tensor)?;
 
+        // Validate tensor shapes before concatenation
+        let (_, _, pre_hidden) = pre_embed.dims3()?;
+        let (_, _, audio_hidden) = audio_features.dims3()?;
+        let (_, _, post_hidden) = post_embed.dims3()?;
+
+        if pre_hidden != audio_hidden || audio_hidden != post_hidden {
+            return Err(candle_core::Error::Msg(format!(
+                "Hidden size mismatch: pre_embed={}, audio_features={}, post_embed={}. \
+                 Expected audio_features to match text hidden_size={}",
+                pre_hidden, audio_hidden, post_hidden, pre_hidden
+            )));
+        }
+
         // Concatenate: [pre_tokens, audio_features, post_tokens]
         let combined =
             Tensor::cat(&[pre_embed, audio_features, post_embed], 1)?;
@@ -503,6 +532,15 @@ impl Qwen3ASRModel {
 
         // Process the combined sequence through the decoder
         let mut logits = self.decoder.forward_embeds(&combined, 0)?;
+
+        // Validate logits shape: should be (batch, seq, vocab_size)
+        let logits_dims = logits.dims();
+        if logits_dims.len() != 3 {
+            return Err(candle_core::Error::Msg(format!(
+                "Expected 3D logits tensor, got shape {:?}",
+                logits_dims
+            )));
+        }
 
         // Generate with greedy decoding
         let max_new_tokens = 256;
