@@ -7,16 +7,16 @@ use std::{
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::VarBuilder;
-use hf_hub::{Repo, RepoType, api::tokio::Api};
+use hf_hub::{api::tokio::Api, Repo, RepoType};
 use tokenizers::{
-    Tokenizer,
     models::bpe::BPE,
     pre_tokenizers::byte_level::ByteLevel,
+    Tokenizer,
 };
 
 use crate::{
     audio_encoder::Qwen3AudioEncoder,
-    config::{Qwen3ASRConfig, special_tokens},
+    config::{special_tokens, Qwen3ASRConfig},
     mel::MelSpectrogram,
     qwen3_decoder::Qwen3Decoder,
 };
@@ -373,18 +373,73 @@ impl Qwen3ASRModel {
         Ok(())
     }
 
+    /// Maximum audio samples per chunk for transcription.
+    ///
+    /// The audio encoder has positional embeddings up to
+    /// `max_source_positions` (1500). After Conv2D 8x downsampling,
+    /// this means at most 1500 * 8 = 12,000 mel frames, which
+    /// corresponds to ~120 seconds. We use 30 seconds (matching
+    /// Whisper's chunk size) for safety and consistency.
+    const CHUNK_SAMPLES: usize = 30 * 16000; // 30 seconds at 16kHz
+
     /// Transcribe audio samples to text.
     ///
     /// Input: f32 audio samples at 16kHz
     /// Output: Transcribed text
+    ///
+    /// For audio longer than 30 seconds, automatically splits into
+    /// chunks and transcribes each independently.
     pub fn transcribe(&mut self, audio: &[f32]) -> Result<String> {
-        use std::time::Instant;
-
+        let duration = audio.len() as f64 / 16000.0;
         tracing::debug!(
             "Audio samples: {}, duration: {:.2}s",
             audio.len(),
-            audio.len() as f64 / 16000.0
+            duration
         );
+
+        // For short audio, process directly
+        if audio.len() <= Self::CHUNK_SAMPLES {
+            return self.transcribe_chunk(audio);
+        }
+
+        // Split into chunks and transcribe each
+        let mut transcripts = Vec::new();
+        let mut offset = 0;
+        let total_chunks = audio.len().div_ceil(Self::CHUNK_SAMPLES);
+
+        tracing::info!(
+            "Audio is {:.1}s, splitting into {} chunks of 30s",
+            duration,
+            total_chunks
+        );
+
+        while offset < audio.len() {
+            let end = (offset + Self::CHUNK_SAMPLES).min(audio.len());
+            let chunk = &audio[offset..end];
+            let chunk_num = offset / Self::CHUNK_SAMPLES + 1;
+
+            tracing::info!(
+                "Transcribing chunk {}/{} ({:.1}s - {:.1}s)",
+                chunk_num,
+                total_chunks,
+                offset as f64 / 16000.0,
+                end as f64 / 16000.0,
+            );
+
+            let text = self.transcribe_chunk(chunk)?;
+            if !text.is_empty() {
+                transcripts.push(text);
+            }
+
+            offset = end;
+        }
+
+        Ok(transcripts.join(" "))
+    }
+
+    /// Transcribe a single chunk of audio (up to 30 seconds).
+    fn transcribe_chunk(&mut self, audio: &[f32]) -> Result<String> {
+        use std::time::Instant;
 
         // Extract mel spectrogram
         let mel_start = Instant::now();

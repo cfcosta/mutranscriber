@@ -8,13 +8,13 @@
 
 use candle_core::{DType, Device, Module, Result, Tensor};
 use candle_nn::{
+    conv2d,
+    linear,
     Activation,
     Conv2d,
     Conv2dConfig,
     Linear,
     VarBuilder,
-    conv2d,
-    linear,
 };
 
 use crate::config::AudioEncoderConfig;

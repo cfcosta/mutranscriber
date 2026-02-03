@@ -6,13 +6,13 @@
 use std::path::PathBuf;
 
 use mutranscriber::{
-    HOP_LENGTH,
     MelSpectrogram,
     ModelVariant,
-    N_MELS,
-    SAMPLE_RATE,
     Transcriber,
     TranscriberConfig,
+    HOP_LENGTH,
+    N_MELS,
+    SAMPLE_RATE,
 };
 
 /// Path to the test audio fixture.
@@ -98,9 +98,10 @@ fn test_mel_spectrogram_computation() {
     // Verify dimensions
     assert_eq!(n_mels, N_MELS, "Expected {} mel bins", N_MELS);
 
-    // Expected frames: (samples - n_fft) / hop_length + 1
-    // For 320k samples: approximately 2000 frames
-    let expected_frames = (samples.len() - 400) / HOP_LENGTH + 1;
+    // Expected frames: (padded_samples - n_fft) / hop_length + 1
+    // MelSpectrogram::new() pads short audio to 30s (480,000 samples)
+    let padded_len = samples.len().max(30 * SAMPLE_RATE);
+    let expected_frames = (padded_len - 400) / HOP_LENGTH + 1;
     assert!(
         (n_frames as i64 - expected_frames as i64).abs() < 10,
         "Frame count mismatch: got {}, expected ~{}",

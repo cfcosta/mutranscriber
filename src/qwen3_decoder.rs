@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{Embedding, Linear, VarBuilder, embedding, linear_no_bias};
+use candle_nn::{embedding, linear_no_bias, Embedding, Linear, VarBuilder};
 use candle_transformers::models::qwen3::Config;
 
 /// RMS normalization layer.

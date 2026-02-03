@@ -307,7 +307,7 @@ pub struct GenerationConfig {
 impl Default for GenerationConfig {
     fn default() -> Self {
         Self {
-            max_new_tokens: 256,
+            max_new_tokens: 4096,
             temperature: None, // Greedy decoding by default
             top_k: None,
             top_p: None,
@@ -391,7 +391,7 @@ mod tests {
     #[test]
     fn test_generation_config_default() {
         let config = GenerationConfig::default();
-        assert_eq!(config.max_new_tokens, 256);
+        assert_eq!(config.max_new_tokens, 4096);
         assert!(config.temperature.is_none());
         assert_eq!(config.eos_token_id, 151643);
     }

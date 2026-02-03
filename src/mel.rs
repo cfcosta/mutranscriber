@@ -265,7 +265,9 @@ impl Fft {
     pub fn magnitude_spectrum(&self, input: &[f32], output: &mut [f32]) {
         let mut real = vec![0.0f32; self.size];
         let mut imag = vec![0.0f32; self.size];
-        self.magnitude_spectrum_with_buffers(input, output, &mut real, &mut imag);
+        self.magnitude_spectrum_with_buffers(
+            input, output, &mut real, &mut imag,
+        );
     }
 
     fn fft_inplace(&self, real: &mut [f32], imag: &mut [f32]) {
@@ -359,11 +361,10 @@ impl MelSpectrogram {
         }
     }
 
-    /// Enable padding to a fixed number of samples.
+    /// Enable minimum padding to a fixed number of samples.
     ///
-    /// When set, audio shorter than n_samples will be right-padded with zeros,
-    /// and audio longer than n_samples will be truncated.
-    /// This matches WhisperFeatureExtractor's behavior with padding="max_length".
+    /// When set, audio shorter than n_samples will be right-padded with zeros.
+    /// Audio longer than n_samples is processed at full length (no truncation).
     pub fn with_padding(mut self, n_samples: usize) -> Self {
         self.n_samples = Some(n_samples);
         self
@@ -383,18 +384,16 @@ impl MelSpectrogram {
     /// If padding is enabled (default), audio is padded/truncated to
     /// n_samples before processing.
     pub fn compute(&self, audio: &[f32]) -> Vec<f32> {
-        // Apply padding/truncation if configured
-        let audio: Cow<'_, [f32]> = if let Some(target_samples) = self.n_samples
-        {
-            if audio.len() < target_samples {
-                // Right-pad with zeros (silence)
+        // Apply minimum padding if configured (pad short audio but
+        // never truncate - the audio encoder handles variable lengths)
+        let audio: Cow<'_, [f32]> = if let Some(min_samples) = self.n_samples {
+            if audio.len() < min_samples {
+                // Right-pad with zeros (silence) to minimum length
                 let mut padded = audio.to_vec();
-                padded.resize(target_samples, 0.0);
+                padded.resize(min_samples, 0.0);
                 Cow::Owned(padded)
-            } else if audio.len() > target_samples {
-                // Truncate to target length
-                Cow::Borrowed(&audio[..target_samples])
             } else {
+                // Process full audio - do NOT truncate
                 Cow::Borrowed(audio)
             }
         } else {
