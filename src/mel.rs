@@ -233,24 +233,39 @@ impl Fft {
 
     /// Compute Fft magnitude spectrum (only positive frequencies).
     /// Output is size/2 + 1 magnitudes.
-    pub fn magnitude_spectrum(&self, input: &[f32], output: &mut [f32]) {
+    /// Uses provided work buffers to avoid per-frame allocations.
+    pub fn magnitude_spectrum_with_buffers(
+        &self,
+        input: &[f32],
+        output: &mut [f32],
+        real: &mut [f32],
+        imag: &mut [f32],
+    ) {
         assert!(input.len() >= self.size);
         assert!(output.len() > self.size / 2);
+        assert!(real.len() >= self.size);
+        assert!(imag.len() >= self.size);
 
-        // Allocate complex buffer
-        let mut real = vec![0.0f32; self.size];
-        let mut imag = vec![0.0f32; self.size];
-
-        // Copy input to real part
+        // Copy input to real part, zero imaginary
         real[..self.size].copy_from_slice(&input[..self.size]);
+        imag[..self.size].fill(0.0);
 
         // In-place Fft
-        self.fft_inplace(&mut real, &mut imag);
+        self.fft_inplace(real, imag);
 
         // Compute magnitude squared for positive frequencies
         for i in 0..=self.size / 2 {
             output[i] = real[i] * real[i] + imag[i] * imag[i];
         }
+    }
+
+    /// Compute Fft magnitude spectrum (allocates work buffers).
+    /// For batch processing, prefer magnitude_spectrum_with_buffers.
+    #[allow(dead_code)]
+    pub fn magnitude_spectrum(&self, input: &[f32], output: &mut [f32]) {
+        let mut real = vec![0.0f32; self.size];
+        let mut imag = vec![0.0f32; self.size];
+        self.magnitude_spectrum_with_buffers(input, output, &mut real, &mut imag);
     }
 
     fn fft_inplace(&self, real: &mut [f32], imag: &mut [f32]) {
@@ -398,9 +413,11 @@ impl MelSpectrogram {
         let fft_size = self.n_fft.next_power_of_two();
         let n_freqs = self.n_fft / 2 + 1;
 
-        // Temporary buffers
+        // Pre-allocate all temporary buffers once
         let mut windowed = vec![0.0f32; fft_size];
         let mut magnitudes = vec![0.0f32; fft_size / 2 + 1];
+        let mut fft_real = vec![0.0f32; fft_size];
+        let mut fft_imag = vec![0.0f32; fft_size];
 
         for frame in 0..n_frames {
             let start = frame * self.hop_length;
@@ -414,8 +431,13 @@ impl MelSpectrogram {
                 }
             }
 
-            // Compute Fft magnitude spectrum
-            self.fft.magnitude_spectrum(&windowed, &mut magnitudes);
+            // Compute Fft magnitude spectrum (reusing buffers)
+            self.fft.magnitude_spectrum_with_buffers(
+                &windowed,
+                &mut magnitudes,
+                &mut fft_real,
+                &mut fft_imag,
+            );
 
             // Apply mel filterbank
             for m in 0..self.n_mels {
