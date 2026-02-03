@@ -220,7 +220,10 @@ impl Attention {
         let (q, k) = self.rotary.apply(&q, &k, offset)?;
 
         // KV cache - store first, then borrow for GQA to avoid unnecessary clones
+        // Note: Tensor::cat copies all previous data + new data, which is O(n²) total
+        // for n tokens. This is inherent to Candle's immutable tensor design.
         let (k, v) = if let Some((prev_k, prev_v)) = &self.kv_cache {
+            // Concatenate along sequence dimension (dim 2)
             let k = Tensor::cat(&[prev_k, &k], 2)?;
             let v = Tensor::cat(&[prev_v, &v], 2)?;
             (k, v)
