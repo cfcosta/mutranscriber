@@ -202,18 +202,21 @@ impl MultiHeadAttention {
         let v = self.v_proj.forward(x)?;
 
         // Reshape to (batch, n_heads, seq_len, head_dim)
+        // contiguous() is required after transpose for matmul on CPU
         let q = q
             .reshape((batch_size, seq_len, self.n_heads, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let k = k
             .reshape((batch_size, seq_len, self.n_heads, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let v = v
             .reshape((batch_size, seq_len, self.n_heads, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
 
         // Scaled dot-product attention
-        // CUBLAS handles transposed inputs natively via transpose flags
         let attn_weights = q.matmul(&k.transpose(2, 3)?)?;
         let attn_weights = (attn_weights * self.scale)?;
         let attn_weights =
