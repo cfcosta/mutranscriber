@@ -312,8 +312,12 @@ impl Default for GenerationConfig {
             top_k: None,
             top_p: None,
             repetition_penalty: None,
-            eos_token_id: 151643,         // <|endoftext|>
-            stop_token_ids: vec![151645], // <|im_end|>
+            eos_token_id: 151643, // <|endoftext|>
+            // Note: Don't include <|im_end|> (151645) in stop tokens for ASR.
+            // The model generates <|im_end|> after each ChatML response segment,
+            // which would truncate transcription to just one sentence.
+            // For ASR, we only stop on <|endoftext|> (eos_token_id).
+            stop_token_ids: vec![],
         }
     }
 }
