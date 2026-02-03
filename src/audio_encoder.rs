@@ -193,22 +193,19 @@ impl MultiHeadAttention {
         let v = self.v_proj.forward(x)?;
 
         // Reshape to (batch, n_heads, seq_len, head_dim)
-        // Make contiguous after transpose for CUDA matmul compatibility
         let q = q
             .reshape((batch_size, seq_len, self.n_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
         let k = k
             .reshape((batch_size, seq_len, self.n_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
         let v = v
             .reshape((batch_size, seq_len, self.n_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
 
         // Scaled dot-product attention
-        let attn_weights = q.matmul(&k.transpose(2, 3)?.contiguous()?)?;
+        // CUBLAS handles transposed inputs natively via transpose flags
+        let attn_weights = q.matmul(&k.transpose(2, 3)?)?;
         let attn_weights = (attn_weights * self.scale)?;
         let attn_weights =
             candle_nn::ops::softmax(&attn_weights, candle_core::D::Minus1)?;
