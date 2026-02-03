@@ -35,7 +35,7 @@ mod model;
 mod qwen3_decoder;
 mod transcriber;
 
-pub use config::{AudioEncoderConfig, Qwen3ASRConfig};
+pub use config::{AudioEncoderConfig, GenerationConfig, Qwen3ASRConfig};
 pub use mel::{
     MelSpectrogram,
     CHUNK_LENGTH,

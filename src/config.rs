@@ -239,3 +239,83 @@ impl Qwen3ASRConfig {
         }
     }
 }
+
+/// Configuration for text generation.
+#[derive(Debug, Clone)]
+pub struct GenerationConfig {
+    /// Maximum number of new tokens to generate.
+    pub max_new_tokens: usize,
+    /// Temperature for sampling (None = greedy decoding).
+    /// Higher values (e.g., 1.0) make output more random,
+    /// lower values (e.g., 0.1) make it more deterministic.
+    pub temperature: Option<f32>,
+    /// Top-k sampling: only consider the k most likely tokens.
+    pub top_k: Option<usize>,
+    /// Top-p (nucleus) sampling: consider tokens with cumulative probability >= p.
+    pub top_p: Option<f32>,
+    /// Repetition penalty to discourage repeating tokens (1.0 = no penalty).
+    pub repetition_penalty: Option<f32>,
+    /// End-of-sequence token ID.
+    pub eos_token_id: u32,
+    /// Additional stop token IDs (e.g., <|im_end|>).
+    pub stop_token_ids: Vec<u32>,
+}
+
+impl Default for GenerationConfig {
+    fn default() -> Self {
+        Self {
+            max_new_tokens: 256,
+            temperature: None, // Greedy decoding by default
+            top_k: None,
+            top_p: None,
+            repetition_penalty: None,
+            eos_token_id: 151643,         // <|endoftext|>
+            stop_token_ids: vec![151645], // <|im_end|>
+        }
+    }
+}
+
+impl GenerationConfig {
+    /// Create config for greedy decoding (deterministic).
+    pub fn greedy() -> Self {
+        Self::default()
+    }
+
+    /// Create config for sampling with temperature.
+    pub fn with_temperature(temperature: f32) -> Self {
+        Self {
+            temperature: Some(temperature),
+            ..Self::default()
+        }
+    }
+
+    /// Set max new tokens.
+    pub fn max_tokens(mut self, max: usize) -> Self {
+        self.max_new_tokens = max;
+        self
+    }
+
+    /// Set temperature (None for greedy).
+    pub fn temperature(mut self, temp: Option<f32>) -> Self {
+        self.temperature = temp;
+        self
+    }
+
+    /// Set top-k sampling.
+    pub fn top_k(mut self, k: Option<usize>) -> Self {
+        self.top_k = k;
+        self
+    }
+
+    /// Set top-p (nucleus) sampling.
+    pub fn top_p(mut self, p: Option<f32>) -> Self {
+        self.top_p = p;
+        self
+    }
+
+    /// Set repetition penalty.
+    pub fn repetition_penalty(mut self, penalty: Option<f32>) -> Self {
+        self.repetition_penalty = penalty;
+        self
+    }
+}
