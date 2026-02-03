@@ -378,6 +378,8 @@ impl Qwen3ASRModel {
     /// Input: f32 audio samples at 16kHz
     /// Output: Transcribed text
     pub fn transcribe(&mut self, audio: &[f32]) -> Result<String> {
+        use std::time::Instant;
+
         tracing::debug!(
             "Audio samples: {}, duration: {:.2}s",
             audio.len(),
@@ -385,11 +387,14 @@ impl Qwen3ASRModel {
         );
 
         // Extract mel spectrogram
+        let mel_start = Instant::now();
         let (mel_data, n_frames, n_mels) = self.mel_extractor.compute_2d(audio);
+        let mel_time = mel_start.elapsed();
         tracing::debug!(
-            "Mel spectrogram: {} frames x {} mels",
+            "Mel spectrogram: {} frames x {} mels (took {:?})",
             n_frames,
-            n_mels
+            n_mels,
+            mel_time
         );
 
         // Create tensor: (1, n_mels, n_frames)
@@ -399,7 +404,9 @@ impl Qwen3ASRModel {
         tracing::debug!("Mel tensor shape: {:?}", mel.dims());
 
         // Encode audio
+        let encode_start = Instant::now();
         let audio_features = self.audio_encoder.forward(&mel)?;
+        let encode_time = encode_start.elapsed();
 
         // Validate audio features shape: should be (batch, seq, hidden_size)
         let af_dims = audio_features.dims();
@@ -441,7 +448,20 @@ impl Qwen3ASRModel {
         }
 
         // Generate transcription using LLM
-        self.generate(audio_features)
+        let generate_start = Instant::now();
+        let result = self.generate(audio_features);
+        let generate_time = generate_start.elapsed();
+
+        // Log timing breakdown
+        tracing::info!(
+            "Timing: mel={:?}, encode={:?}, generate={:?}, total={:?}",
+            mel_time,
+            encode_time,
+            generate_time,
+            mel_time + encode_time + generate_time
+        );
+
+        result
     }
 
     /// Generate text from audio features.
@@ -571,6 +591,7 @@ impl Qwen3ASRModel {
         let mut generated_tokens = Vec::new();
         let mut position = total_prompt_len;
 
+        let token_gen_start = std::time::Instant::now();
         for i in 0..gen_config.max_new_tokens {
             // Get logits for the last token
             let last_logits = logits.i((.., logits.dim(1)? - 1, ..))?;
@@ -622,11 +643,20 @@ impl Qwen3ASRModel {
             position += 1;
         }
 
-        tracing::debug!(
-            "Generated {} tokens: {:?}",
+        let token_gen_time = token_gen_start.elapsed();
+        let tokens_per_sec = if token_gen_time.as_secs_f64() > 0.0 {
+            generated_tokens.len() as f64 / token_gen_time.as_secs_f64()
+        } else {
+            0.0
+        };
+
+        tracing::info!(
+            "Generated {} tokens in {:?} ({:.1} tokens/sec)",
             generated_tokens.len(),
-            generated_tokens
+            token_gen_time,
+            tokens_per_sec
         );
+        tracing::debug!("Generated tokens: {:?}", generated_tokens);
 
         // Decode tokens to text - ByteLevel decoder handles byte-to-unicode mapping
         let text =
