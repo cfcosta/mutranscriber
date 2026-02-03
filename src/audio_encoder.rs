@@ -38,8 +38,13 @@ impl LayerNorm {
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let dtype = x.dtype();
-        // Compute in f32 for numerical stability
-        let x = x.to_dtype(DType::F32)?;
+
+        // Compute in f32 for numerical stability (skip if already f32)
+        let x = if dtype == DType::F32 {
+            x.clone()
+        } else {
+            x.to_dtype(DType::F32)?
+        };
 
         // Layer norm: (x - mean) / sqrt(var + eps) * gamma + beta
         let mean = x.mean_keepdim(candle_core::D::Minus1)?;
@@ -49,9 +54,13 @@ impl LayerNorm {
         let x_norm =
             x_centered.broadcast_div(&(variance + self.eps)?.sqrt()?)?;
 
-        // Apply weight and bias, convert back to original dtype
+        // Apply weight and bias, convert back if needed
+        let x_norm = if dtype != DType::F32 {
+            x_norm.to_dtype(dtype)?
+        } else {
+            x_norm
+        };
         x_norm
-            .to_dtype(dtype)?
             .broadcast_mul(&self.weight)?
             .broadcast_add(&self.bias)
     }

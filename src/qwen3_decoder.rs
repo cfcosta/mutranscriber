@@ -23,10 +23,18 @@ impl RmsNorm {
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let dtype = x.dtype();
-        let x = x.to_dtype(DType::F32)?;
+        let x = if dtype == DType::F32 {
+            x.clone()
+        } else {
+            x.to_dtype(DType::F32)?
+        };
         let variance = x.sqr()?.mean_keepdim(candle_core::D::Minus1)?;
         let x = x.broadcast_div(&(variance + self.eps)?.sqrt()?)?;
-        x.to_dtype(dtype)?.broadcast_mul(&self.weight)
+        if dtype != DType::F32 {
+            x.to_dtype(dtype)?.broadcast_mul(&self.weight)
+        } else {
+            x.broadcast_mul(&self.weight)
+        }
     }
 }
 
