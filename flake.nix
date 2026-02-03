@@ -128,7 +128,7 @@
 
         formatter = formatter;
 
-        packages = {
+        packages = rec {
           # CPU-only build (default)
           mutranscriber-cpu = rustPlatform.buildRustPackage {
             pname = "mutranscriber";
@@ -225,6 +225,8 @@
             };
           };
 
+          # Default to CPU build
+          default = mutranscriber-cpu;
         };
       }
     );

@@ -26,6 +26,21 @@ cargo install --path . --features metal   # macOS
 cargo install --path . --no-default-features
 ```
 
+### With Nix
+
+```bash
+# CPU-only build
+nix build github:cfcosta/mutranscriber#mutranscriber-cpu
+
+# CUDA-enabled build (NixOS with NVIDIA drivers)
+nix build github:cfcosta/mutranscriber#mutranscriber-cuda
+
+# Run directly without installing
+nix run github:cfcosta/mutranscriber#mutranscriber-cpu -- audio.wav
+```
+
+The Nix packages include all dependencies (GStreamer plugins, CUDA libraries) and work out of the box.
+
 ### Requirements
 
 - Rust 1.70+
