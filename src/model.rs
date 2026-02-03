@@ -611,22 +611,13 @@ impl Qwen3ASRModel {
                 break;
             }
 
-            // Skip special tokens in output but still feed them to the decoder.
-            // Special tokens (>= eos_token_id) are control tokens that shouldn't
-            // appear in the transcription text, but they provide context to the
-            // model for continued generation.
-            if self.generation_config.is_special_token(next_token) {
-                tracing::debug!("Skipping special token {}", next_token);
-                let next_input =
-                    Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
-                logits = self.decoder.forward(&next_input, position)?;
-                position += 1;
-                continue;
+            // Skip special tokens in output but still feed them
+            // to the decoder for context.
+            if !self.generation_config.is_special_token(next_token) {
+                generated_tokens.push(next_token);
             }
 
-            generated_tokens.push(next_token);
-
-            // Prepare next input
+            // Feed token back to decoder
             let next_input =
                 Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
             logits = self.decoder.forward(&next_input, position)?;
