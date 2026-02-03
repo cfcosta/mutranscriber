@@ -302,21 +302,18 @@ fn extract_audio_sync(
     })?;
 
     // Collect samples using pull-based API (avoids Arc ownership issues with callbacks)
-    let mut samples = Vec::new();
+    // Pre-allocate for ~30 seconds at 16kHz to reduce reallocations
+    let estimated_samples = sample_rate as usize * 30;
+    let mut samples = Vec::with_capacity(estimated_samples);
 
     while let Ok(sample) = appsink.pull_sample() {
         if let Some(buffer) = sample.buffer() {
             if let Ok(map) = buffer.map_readable() {
                 let bytes = map.as_slice();
-                let float_samples: Vec<f32> = bytes
-                    .chunks_exact(4)
-                    .map(|chunk| {
-                        f32::from_le_bytes([
-                            chunk[0], chunk[1], chunk[2], chunk[3],
-                        ])
-                    })
-                    .collect();
-                samples.extend(float_samples);
+                // Extend directly without intermediate Vec allocation
+                samples.extend(bytes.chunks_exact(4).map(|chunk| {
+                    f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                }));
             }
         }
     }
