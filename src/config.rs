@@ -318,4 +318,69 @@ impl GenerationConfig {
         self.repetition_penalty = penalty;
         self
     }
+
+    /// Check if a token ID is a special token.
+    ///
+    /// Special tokens in Qwen3-ASR are those with IDs >= `eos_token_id` (151643).
+    /// These include:
+    /// - 151643: `<|endoftext|>` (EOS)
+    /// - 151644: `<|im_start|>` (ChatML)
+    /// - 151645: `<|im_end|>` (ChatML)
+    /// - 151669: `<|audio_start|>`
+    /// - 151670: `<|audio_end|>`
+    /// - 151676: audio placeholder token
+    /// - 151704: `<asr_text>` (ASR task marker)
+    ///
+    /// The vocab size is 151936, so special tokens span IDs 151643-151935.
+    pub fn is_special_token(&self, token_id: u32) -> bool {
+        token_id >= self.eos_token_id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generation_config_default() {
+        let config = GenerationConfig::default();
+        assert_eq!(config.max_new_tokens, 256);
+        assert!(config.temperature.is_none());
+        assert_eq!(config.eos_token_id, 151643);
+    }
+
+    #[test]
+    fn test_special_token_detection() {
+        let config = GenerationConfig::default();
+
+        // Regular text tokens are not special
+        assert!(!config.is_special_token(0));
+        assert!(!config.is_special_token(1000));
+        assert!(!config.is_special_token(151642)); // Just before EOS
+
+        // EOS and beyond are special tokens
+        assert!(config.is_special_token(151643)); // <|endoftext|>
+        assert!(config.is_special_token(151644)); // <|im_start|>
+        assert!(config.is_special_token(151645)); // <|im_end|>
+        assert!(config.is_special_token(151669)); // <|audio_start|>
+        assert!(config.is_special_token(151670)); // <|audio_end|>
+        assert!(config.is_special_token(151676)); // audio placeholder
+        assert!(config.is_special_token(151704)); // <asr_text>
+        assert!(config.is_special_token(151935)); // Last valid vocab token
+    }
+
+    #[test]
+    fn test_generation_config_builder() {
+        let config = GenerationConfig::with_temperature(0.7)
+            .max_tokens(512)
+            .top_k(Some(50))
+            .top_p(Some(0.9))
+            .repetition_penalty(Some(1.1));
+
+        assert_eq!(config.max_new_tokens, 512);
+        assert_eq!(config.temperature, Some(0.7));
+        assert_eq!(config.top_k, Some(50));
+        assert_eq!(config.top_p, Some(0.9));
+        assert_eq!(config.repetition_penalty, Some(1.1));
+    }
 }
