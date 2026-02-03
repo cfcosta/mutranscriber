@@ -15,21 +15,21 @@ Native Rust audio transcription using [Qwen3-ASR](https://huggingface.co/Qwen/Qw
 ### From source
 
 ```bash
-# Basic build (CPU only)
+# Standard build (includes GStreamer support)
 cargo install --path .
 
 # With GPU support
 cargo install --path . --features cuda    # NVIDIA
 cargo install --path . --features metal   # macOS
 
-# With audio/video file support
-cargo install --path . --features gstreamer
+# Without GStreamer (library-only, no file loading)
+cargo install --path . --no-default-features
 ```
 
 ### Requirements
 
 - Rust 1.70+
-- For `gstreamer` feature: GStreamer development libraries
+- GStreamer development libraries (enabled by default)
 - For `cuda` feature: CUDA toolkit
 - For `metal` feature: macOS with Metal support
 
@@ -41,7 +41,7 @@ cargo install --path . --features gstreamer
 # Transcribe an audio file
 mutranscriber recording.wav
 
-# Transcribe a video file (requires gstreamer feature)
+# Transcribe a video file
 mutranscriber video.mp4
 
 # Use the larger model
@@ -107,11 +107,11 @@ When using the `gstreamer` feature, audio is automatically extracted and resampl
 
 ## Build Features
 
-| Feature | Description |
-|---------|-------------|
-| `gstreamer` | Audio extraction from video/audio files |
-| `cuda` | NVIDIA GPU acceleration |
-| `metal` | Apple Metal GPU acceleration |
+| Feature | Description | Default |
+|---------|-------------|---------|
+| `gstreamer` | Audio extraction from video/audio files | Yes |
+| `cuda` | NVIDIA GPU acceleration | No |
+| `metal` | Apple Metal GPU acceleration | No |
 
 ## Development
 
