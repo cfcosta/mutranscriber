@@ -100,12 +100,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Input: {}", args.input.display());
     tracing::info!("Model: {:?}", variant);
     tracing::info!(
-        "Device: {}",
-        if args.cpu {
-            "CPU"
-        } else {
-            "GPU (if available)"
-        }
+        "Requested accelerator: {}",
+        if args.cpu { "CPU" } else { "GPU" }
     );
 
     // Create transcriber

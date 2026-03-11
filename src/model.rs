@@ -49,6 +49,46 @@ impl ModelVariant {
     }
 }
 
+/// Resolve the default execution device for inference.
+pub(crate) fn resolve_device(use_gpu: bool) -> Result<Device> {
+    if !use_gpu {
+        return Ok(Device::Cpu);
+    }
+
+    #[cfg(feature = "cuda")]
+    {
+        return Device::new_cuda(0);
+    }
+
+    #[cfg(all(not(feature = "cuda"), feature = "metal"))]
+    {
+        return Device::new_metal(0);
+    }
+
+    #[cfg(not(any(feature = "cuda", feature = "metal")))]
+    {
+        Ok(Device::Cpu)
+    }
+}
+
+/// Whether this build has any GPU backend enabled.
+pub(crate) fn has_gpu_backend() -> bool {
+    cfg!(any(feature = "cuda", feature = "metal"))
+}
+
+/// Format a device for user-facing logs.
+pub(crate) fn format_device(device: &Device) -> String {
+    match device.location() {
+        candle_core::DeviceLocation::Cpu => "CPU".to_string(),
+        candle_core::DeviceLocation::Cuda { gpu_id } => {
+            format!("CUDA:{}", gpu_id)
+        }
+        candle_core::DeviceLocation::Metal { gpu_id } => {
+            format!("Metal:{}", gpu_id)
+        }
+    }
+}
+
 /// Full Qwen3-ASR model for audio transcription.
 pub struct Qwen3ASRModel {
     audio_encoder: Qwen3AudioEncoder,
@@ -932,10 +972,8 @@ impl Qwen3ASRModelBuilder {
     pub async fn build(self) -> Result<Qwen3ASRModel> {
         let device = if let Some(d) = self.device {
             d
-        } else if self.use_gpu {
-            Device::cuda_if_available(0)?
         } else {
-            Device::Cpu
+            resolve_device(self.use_gpu)?
         };
 
         Qwen3ASRModel::from_pretrained(self.variant, &device).await

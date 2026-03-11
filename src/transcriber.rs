@@ -8,10 +8,15 @@ use std::{
     sync::Arc,
 };
 
-use candle_core::Device;
 use tokio::sync::Mutex;
 
-use crate::model::{ModelVariant, Qwen3ASRModel};
+use crate::model::{
+    format_device,
+    has_gpu_backend,
+    resolve_device,
+    ModelVariant,
+    Qwen3ASRModel,
+};
 
 /// Error type for transcription operations.
 #[derive(Debug, thiserror::Error)]
@@ -121,12 +126,17 @@ impl Transcriber {
                 "Loading transcription model (lazy initialization)..."
             );
 
-            let device = if self.config.use_gpu {
-                Device::cuda_if_available(0)
-                    .map_err(|e| TranscriberError::Model(e.to_string()))?
-            } else {
-                Device::Cpu
-            };
+            let device = resolve_device(self.config.use_gpu)
+                .map_err(|e| TranscriberError::Model(e.to_string()))?;
+
+            if self.config.use_gpu && device.is_cpu() && !has_gpu_backend() {
+                tracing::warn!(
+                    "GPU requested, but this build has no GPU backend enabled; \
+                     falling back to CPU. Rebuild with `--features cuda` \
+                     (NVIDIA) or `--features metal` (macOS)."
+                );
+            }
+            tracing::info!("Using device: {}", format_device(&device));
 
             let model =
                 Qwen3ASRModel::from_pretrained(self.config.variant, &device)
