@@ -166,6 +166,7 @@
             meta = {
               description = "Audio transcription using Qwen3-ASR";
               license = pkgs.lib.licenses.mit;
+              mainProgram = "mutranscriber";
             };
           };
 
@@ -184,14 +185,17 @@
               pkgs.makeWrapper
               pkgs.cudaPackages.cuda_nvcc
             ];
+
             buildInputs = [
               cuda
-              pkgs.gst_all_1.gstreamer
+
+              pkgs.autoAddDriverRunpath
+              pkgs.gst_all_1.gst-libav
+              pkgs.gst_all_1.gst-plugins-bad
               pkgs.gst_all_1.gst-plugins-base
               pkgs.gst_all_1.gst-plugins-good
-              pkgs.gst_all_1.gst-plugins-bad
               pkgs.gst_all_1.gst-plugins-ugly
-              pkgs.gst_all_1.gst-libav
+              pkgs.gst_all_1.gstreamer
             ];
 
             # Enable CUDA feature
@@ -223,6 +227,7 @@
               description = "Audio transcription using Qwen3-ASR (CUDA-enabled)";
               license = pkgs.lib.licenses.mit;
               defaultProgram = "mutranscriber";
+              mainProgram = "mutranscriber";
             };
           };
 
