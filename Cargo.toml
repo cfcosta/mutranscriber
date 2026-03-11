@@ -9,6 +9,7 @@ description = "Tool to transcribe video files using Qwen3-ASR"
 byteorder = "1.5"
 candle-core = "0.9"
 candle-nn = "0.9"
+candle-flash-attn = { version = "0.9", optional = true }
 candle-transformers = "0.9"
 clap = { version = "4.5", features = ["derive"] }
 hf-hub = { version = "0.4", default-features = false, features = [
@@ -37,5 +38,5 @@ gstreamer-app = { version = "0.24", optional = true }
 [features]
 default = ["gstreamer"]
 gstreamer = ["dep:gstreamer", "dep:gstreamer-app"]
-cuda = ["candle-core/cuda"]
+cuda = ["candle-core/cuda", "dep:candle-flash-attn"]
 metal = ["candle-core/metal"]

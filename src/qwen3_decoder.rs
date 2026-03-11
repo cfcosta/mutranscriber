@@ -140,7 +140,10 @@ impl Mlp {
     }
 }
 
-/// Self-attention with KV cache.
+/// Maximum sequence length for pre-allocated KV cache.
+const MAX_SEQ_LEN: usize = 2048;
+
+/// Self-attention with pre-allocated KV cache.
 struct Attention {
     q_proj: Linear,
     k_proj: Linear,
@@ -152,7 +155,9 @@ struct Attention {
     num_kv_heads: usize,
     head_dim: usize,
     rotary: Arc<RotaryEmbedding>,
-    kv_cache: Option<(Tensor, Tensor)>,
+    k_cache: Option<Tensor>,
+    v_cache: Option<Tensor>,
+    cache_len: usize,
 }
 
 impl Attention {
@@ -192,7 +197,9 @@ impl Attention {
             num_kv_heads,
             head_dim,
             rotary,
-            kv_cache: None,
+            k_cache: None,
+            v_cache: None,
+            cache_len: 0,
         })
     }
 
@@ -219,7 +226,7 @@ impl Attention {
         let q = self.q_norm.forward(&q)?;
         let k = self.k_norm.forward(&k)?;
 
-        // Transpose to (batch, num_heads, seq, head_dim)
+        // Transpose to (batch, num_heads, seq, head_dim) for RoPE
         let q = q.transpose(1, 2)?;
         let k = k.transpose(1, 2)?;
         let v = v.transpose(1, 2)?;
@@ -227,44 +234,75 @@ impl Attention {
         // Apply rotary embeddings
         let (q, k) = self.rotary.apply(&q, &k, offset)?;
 
-        // KV cache - store first, then borrow for GQA to avoid unnecessary clones
-        // Note: Tensor::cat copies all previous data + new data, which is O(n²) total
-        // for n tokens. This is inherent to Candle's immutable tensor design.
-        let (k, v) = if let Some((prev_k, prev_v)) = &self.kv_cache {
-            // Concatenate along sequence dimension (dim 2)
-            let k = Tensor::cat(&[prev_k, &k], 2)?;
-            let v = Tensor::cat(&[prev_v, &v], 2)?;
-            (k, v)
-        } else {
-            (k, v)
-        };
-        self.kv_cache = Some((k, v));
+        // Pre-allocated KV cache: allocate on first use, then slice_set for O(1) writes
+        let k = k.contiguous()?;
+        let v = v.contiguous()?;
+        if self.k_cache.is_none() {
+            let k_buf = Tensor::zeros(
+                (batch, self.num_kv_heads, MAX_SEQ_LEN, self.head_dim),
+                k.dtype(),
+                k.device(),
+            )?;
+            let v_buf = Tensor::zeros(
+                (batch, self.num_kv_heads, MAX_SEQ_LEN, self.head_dim),
+                v.dtype(),
+                v.device(),
+            )?;
+            self.k_cache = Some(k_buf);
+            self.v_cache = Some(v_buf);
+        }
 
-        // Borrow from cache for GQA expansion (avoids clone when num_groups > 1)
-        let (k_cache, v_cache) = self.kv_cache.as_ref().unwrap();
+        let k_cache = self.k_cache.as_ref().unwrap();
+        let v_cache = self.v_cache.as_ref().unwrap();
+        k_cache.slice_set(&k, 2, self.cache_len)?;
+        v_cache.slice_set(&v, 2, self.cache_len)?;
+        self.cache_len += seq_len;
 
-        // Repeat KV for GQA
+        let k_full = k_cache.narrow(2, 0, self.cache_len)?;
+        let v_full = v_cache.narrow(2, 0, self.cache_len)?;
+
+        // Flash attention path (CUDA only) — handles GQA natively, no mask needed
+        #[cfg(feature = "cuda")]
+        {
+            if q.device().is_cuda() {
+                // flash_attn expects (batch, seq, heads, dim)
+                let q = q.transpose(1, 2)?.contiguous()?;
+                let k = k_full.transpose(1, 2)?.contiguous()?;
+                let v = v_full.transpose(1, 2)?.contiguous()?;
+                let scale = (self.head_dim as f32).powf(-0.5);
+                let out =
+                    candle_flash_attn::flash_attn(&q, &k, &v, scale, true)?;
+                // out: (batch, seq_q, num_heads, head_dim)
+                let out = out.reshape((
+                    batch,
+                    seq_len,
+                    self.num_heads * self.head_dim,
+                ))?;
+                return self.o_proj.forward(&out);
+            }
+        }
+
+        // CPU/Metal fallback: naive attention with GQA expansion
         let num_groups = self.num_heads / self.num_kv_heads;
         let k = if num_groups > 1 {
-            let (b, h, s, d) = k_cache.dims4()?;
-            k_cache
+            let (b, h, s, d) = k_full.dims4()?;
+            k_full
                 .unsqueeze(2)?
                 .expand((b, h, num_groups, s, d))?
                 .reshape((b, h * num_groups, s, d))?
         } else {
-            k_cache.clone()
+            k_full
         };
         let v = if num_groups > 1 {
-            let (b, h, s, d) = v_cache.dims4()?;
-            v_cache
+            let (b, h, s, d) = v_full.dims4()?;
+            v_full
                 .unsqueeze(2)?
                 .expand((b, h, num_groups, s, d))?
                 .reshape((b, h * num_groups, s, d))?
         } else {
-            v_cache.clone()
+            v_full
         };
 
-        // Scaled dot-product attention
         let scale = (self.head_dim as f64).powf(-0.5);
         let attn = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
         let attn = if let Some(m) = mask {
@@ -274,7 +312,6 @@ impl Attention {
         };
         let attn = candle_nn::ops::softmax(&attn, candle_core::D::Minus1)?;
 
-        // Output projection
         let out = attn.matmul(&v)?;
         let out = out.transpose(1, 2)?.reshape((
             batch,
@@ -285,7 +322,9 @@ impl Attention {
     }
 
     fn clear_kv_cache(&mut self) {
-        self.kv_cache = None;
+        self.k_cache = None;
+        self.v_cache = None;
+        self.cache_len = 0;
     }
 }
 
