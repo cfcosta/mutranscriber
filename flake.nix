@@ -78,6 +78,14 @@
             pkgs.cudatoolkit
           ];
         };
+
+        # Pre-fetched cutlass headers for candle-flash-attn (can't git clone in Nix sandbox)
+        cutlass-src = pkgs.fetchFromGitHub {
+          owner = "NVIDIA";
+          repo = "cutlass";
+          rev = "7d49e6c7e2f8896c47f586706e67e1fb215529dc";
+          hash = "sha256-D/s7eYsa5l/mfx73tE4mnFcTQdYqGmXa9d9TCryw4e4=";
+        };
       in
       {
         checks.pre-commit-check = pre-commit-hooks.lib.${system}.run {
@@ -184,6 +192,7 @@
               pkgs.pkg-config
               pkgs.makeWrapper
               pkgs.cudaPackages.cuda_nvcc
+              pkgs.git
             ];
 
             buildInputs = [
@@ -204,6 +213,36 @@
             CUDA_HOME = "${cuda}";
             CUDA_PATH = "${cuda}";
             CUDA_ROOT = "${cuda}";
+
+            # Wrap git so candle-flash-attn's build script uses pre-fetched cutlass
+            preBuild =
+              let
+                gitWrapper = pkgs.writeShellScript "git" ''
+                  case "$1" in
+                    clone)
+                      dest="''${@: -1}"
+                      mkdir -p "$dest"
+                      cp -r "${cutlass-src}/." "$dest/"
+                      ${pkgs.git}/bin/git init -q "$dest"
+                      cd "$dest"
+                      ${pkgs.git}/bin/git add -A
+                      ${pkgs.git}/bin/git -c user.name=nix -c user.email=nix@nix commit -q -m init
+                      exit 0
+                      ;;
+                    sparse-checkout|fetch|checkout)
+                      exit 0
+                      ;;
+                    *)
+                      exec ${pkgs.git}/bin/git "$@"
+                      ;;
+                  esac
+                '';
+              in
+              ''
+                mkdir -p .git-wrapper
+                ln -sf ${gitWrapper} .git-wrapper/git
+                export PATH="$PWD/.git-wrapper:$PATH"
+              '';
 
             # Set CUDA compute capability to skip nvidia-smi detection in sandbox
             # Default to 8.6 (Ampere/RTX 30 series). Override with CUDA_COMPUTE_CAP env var if needed.
