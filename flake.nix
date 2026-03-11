@@ -222,6 +222,7 @@
             meta = {
               description = "Audio transcription using Qwen3-ASR (CUDA-enabled)";
               license = pkgs.lib.licenses.mit;
+              defaultProgram = "mutranscriber";
             };
           };
 
