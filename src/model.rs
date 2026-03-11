@@ -292,7 +292,11 @@ impl Qwen3ASRModel {
     ) -> Result<Self> {
         // Load model weights (supports both single file and sharded weights)
         // Use BF16 on CUDA for ~2x faster inference via tensor cores; F32 on CPU
-        let dtype = if device.is_cuda() { DType::BF16 } else { DType::F32 };
+        let dtype = if device.is_cuda() {
+            DType::BF16
+        } else {
+            DType::F32
+        };
         let path_refs: Vec<&Path> =
             model_paths.iter().map(|p: &PathBuf| p.as_path()).collect();
         let vb = unsafe {

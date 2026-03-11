@@ -6,37 +6,22 @@
 use std::sync::Arc;
 
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{embedding, linear_no_bias, Embedding, Linear, VarBuilder};
+use candle_nn::{
+    embedding,
+    linear_no_bias,
+    rms_norm,
+    rotary_emb,
+    Embedding,
+    Linear,
+    VarBuilder,
+};
 use candle_transformers::models::qwen3::Config;
 
-/// RMS normalization layer.
-struct RmsNorm {
-    weight: Tensor,
-    eps: f64,
-}
-
-impl RmsNorm {
-    fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let weight = vb.get(size, "weight")?;
-        Ok(Self { weight, eps })
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let dtype = x.dtype();
-        let x = if dtype == DType::F32 {
-            x.clone()
-        } else {
-            x.to_dtype(DType::F32)?
-        };
-        let variance = x.sqr()?.mean_keepdim(candle_core::D::Minus1)?;
-        let x = x.broadcast_div(&(variance + self.eps)?.sqrt()?)?;
-        if dtype != DType::F32 {
-            x.to_dtype(dtype)?.broadcast_mul(&self.weight)
-        } else {
-            x.broadcast_mul(&self.weight)
-        }
-    }
-}
+/// RMS normalization.
+///
+/// Candle 0.9 provides fused CUDA/Metal kernels for contiguous inputs, which
+/// is substantially faster than composing rms-norm from basic tensor ops.
+type RmsNorm = candle_nn::RmsNorm;
 
 /// Rotary position embedding.
 struct RotaryEmbedding {
@@ -75,35 +60,9 @@ impl RotaryEmbedding {
         let (_, seq_len, _, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?;
         let sin = self.sin.narrow(0, offset, seq_len)?;
-        let q_embed = Self::rope(&q.contiguous()?, &cos, &sin)?;
-        let k_embed = Self::rope(&k.contiguous()?, &cos, &sin)?;
+        let q_embed = rotary_emb::rope_thd(&q.contiguous()?, &cos, &sin)?;
+        let k_embed = rotary_emb::rope_thd(&k.contiguous()?, &cos, &sin)?;
         Ok((q_embed, k_embed))
-    }
-
-    /// CUDA-compatible rotary position embedding using basic tensor ops.
-    /// Expects input in (batch, seq, heads, dim) layout.
-    fn rope(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
-        let (_, _, _, d) = x.dims4()?;
-        let half_d = d / 2;
-
-        // Split into first half and second half
-        let x1 = x.narrow(3, 0, half_d)?;
-        let x2 = x.narrow(3, half_d, half_d)?;
-
-        // Broadcast cos/sin to match (batch, seq, heads, half_d) layout
-        // (seq, half_d) -> (1, seq, 1, half_d)
-        let cos = cos.unsqueeze(0)?.unsqueeze(2)?;
-        let sin = sin.unsqueeze(0)?.unsqueeze(2)?;
-
-        // Apply rotation: [x1, x2] -> [x1*cos - x2*sin, x2*cos + x1*sin]
-        let y1 = x1
-            .broadcast_mul(&cos)?
-            .broadcast_sub(&x2.broadcast_mul(&sin)?)?;
-        let y2 = x2
-            .broadcast_mul(&cos)?
-            .broadcast_add(&x1.broadcast_mul(&sin)?)?;
-
-        Tensor::cat(&[&y1, &y2], 3)
     }
 }
 
@@ -194,8 +153,8 @@ impl Attention {
                 cfg.hidden_size,
                 vb.pp("o_proj"),
             )?,
-            q_norm: RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?,
-            k_norm: RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?,
+            q_norm: rms_norm(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?,
+            k_norm: rms_norm(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?,
             num_heads,
             num_kv_heads,
             head_dim,
@@ -265,8 +224,9 @@ impl Attention {
                 let k_full = k_cache.narrow(1, 0, self.cache_len)?;
                 let v_full = v_cache.narrow(1, 0, self.cache_len)?;
                 let scale = (self.head_dim as f32).powf(-0.5);
-                let out =
-                    candle_flash_attn::flash_attn(&q, &k_full, &v_full, scale, true)?;
+                let out = candle_flash_attn::flash_attn(
+                    &q, &k_full, &v_full, scale, true,
+                )?;
                 let out = out.reshape((
                     batch,
                     seq_len,
@@ -278,8 +238,14 @@ impl Attention {
 
         // CPU/Metal fallback: transpose to (batch, heads, seq, dim) for naive matmul attention
         let q = q.transpose(1, 2)?.contiguous()?;
-        let k_full = k_cache.narrow(1, 0, self.cache_len)?.transpose(1, 2)?.contiguous()?;
-        let v_full = v_cache.narrow(1, 0, self.cache_len)?.transpose(1, 2)?.contiguous()?;
+        let k_full = k_cache
+            .narrow(1, 0, self.cache_len)?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let v_full = v_cache
+            .narrow(1, 0, self.cache_len)?
+            .transpose(1, 2)?
+            .contiguous()?;
 
         // GQA expansion
         let num_groups = self.num_heads / self.num_kv_heads;
@@ -344,12 +310,12 @@ impl DecoderLayer {
         Ok(Self {
             self_attn: Attention::new(cfg, rotary, vb.pp("self_attn"))?,
             mlp: Mlp::new(cfg, vb.pp("mlp"))?,
-            input_layernorm: RmsNorm::new(
+            input_layernorm: rms_norm(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 vb.pp("input_layernorm"),
             )?,
-            post_attention_layernorm: RmsNorm::new(
+            post_attention_layernorm: rms_norm(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 vb.pp("post_attention_layernorm"),
@@ -410,11 +376,8 @@ impl Qwen3Decoder {
             )?);
         }
 
-        let norm = RmsNorm::new(
-            cfg.hidden_size,
-            cfg.rms_norm_eps,
-            vb.pp("model.norm"),
-        )?;
+        let norm =
+            rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
 
         // lm_head is tied with embed_tokens for Qwen3
         let lm_head = if cfg.tie_word_embeddings {

@@ -6,9 +6,10 @@
 //! - Transformer encoder layers
 //! - Output projection to LLM hidden dimension
 
-use candle_core::{DType, Device, Module, Result, Tensor};
+use candle_core::{Device, Module, Result, Tensor};
 use candle_nn::{
     conv2d,
+    layer_norm,
     linear,
     Activation,
     Conv2d,
@@ -19,52 +20,11 @@ use candle_nn::{
 
 use crate::config::AudioEncoderConfig;
 
-/// Layer normalization with CUDA-compatible implementation.
+/// Layer normalization.
 ///
-/// Uses basic tensor operations instead of candle_nn::layer_norm
-/// which lacks CUDA kernel support.
-struct LayerNorm {
-    weight: Tensor,
-    bias: Tensor,
-    eps: f64,
-}
-
-impl LayerNorm {
-    fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let weight = vb.get(size, "weight")?;
-        let bias = vb.get(size, "bias")?;
-        Ok(Self { weight, bias, eps })
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let dtype = x.dtype();
-
-        // Compute in f32 for numerical stability (skip if already f32)
-        let x = if dtype == DType::F32 {
-            x.clone()
-        } else {
-            x.to_dtype(DType::F32)?
-        };
-
-        // Layer norm: (x - mean) / sqrt(var + eps) * gamma + beta
-        let mean = x.mean_keepdim(candle_core::D::Minus1)?;
-        let x_centered = x.broadcast_sub(&mean)?;
-        let variance =
-            x_centered.sqr()?.mean_keepdim(candle_core::D::Minus1)?;
-        let x_norm =
-            x_centered.broadcast_div(&(variance + self.eps)?.sqrt()?)?;
-
-        // Apply weight and bias, convert back if needed
-        let x_norm = if dtype != DType::F32 {
-            x_norm.to_dtype(dtype)?
-        } else {
-            x_norm
-        };
-        x_norm
-            .broadcast_mul(&self.weight)?
-            .broadcast_add(&self.bias)
-    }
-}
+/// Candle 0.9 provides fused CUDA/Metal kernels for contiguous inputs, which
+/// is substantially faster than composing layer-norm from basic tensor ops.
+type LayerNorm = candle_nn::LayerNorm;
 
 /// Sinusoidal positional embeddings for audio features.
 ///
@@ -217,9 +177,8 @@ impl MultiHeadAttention {
                 let k = k.contiguous()?;
                 let v = v.contiguous()?;
                 let scale = self.scale as f32;
-                let out = candle_flash_attn::flash_attn(
-                    &q, &k, &v, scale, false,
-                )?;
+                let out =
+                    candle_flash_attn::flash_attn(&q, &k, &v, scale, false)?;
                 let out = out.reshape((
                     batch_size,
                     seq_len,
@@ -293,11 +252,8 @@ impl EncoderLayer {
             config.encoder_attention_heads,
             vb.pp("self_attn"),
         )?;
-        let self_attn_layer_norm = LayerNorm::new(
-            config.d_model,
-            1e-5,
-            vb.pp("self_attn_layer_norm"),
-        )?;
+        let self_attn_layer_norm =
+            layer_norm(config.d_model, 1e-5, vb.pp("self_attn_layer_norm"))?;
         // FFN uses fc1/fc2 directly at layer level, not nested
         let ffn = FeedForward::new(
             config.d_model,
@@ -305,7 +261,7 @@ impl EncoderLayer {
             vb.clone(),
         )?;
         let final_layer_norm =
-            LayerNorm::new(config.d_model, 1e-5, vb.pp("final_layer_norm"))?;
+            layer_norm(config.d_model, 1e-5, vb.pp("final_layer_norm"))?;
 
         Ok(Self {
             self_attn,
@@ -340,7 +296,7 @@ struct OutputProjection {
 
 impl OutputProjection {
     fn new(d_model: usize, output_dim: usize, vb: VarBuilder) -> Result<Self> {
-        let ln_post = LayerNorm::new(d_model, 1e-5, vb.pp("ln_post"))?;
+        let ln_post = layer_norm(d_model, 1e-5, vb.pp("ln_post"))?;
         let proj1 = linear(d_model, d_model, vb.pp("proj1"))?;
         let proj2 = linear(d_model, output_dim, vb.pp("proj2"))?;
 

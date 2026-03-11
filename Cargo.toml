@@ -38,5 +38,12 @@ gstreamer-app = { version = "0.24", optional = true }
 [features]
 default = ["gstreamer"]
 gstreamer = ["dep:gstreamer", "dep:gstreamer-app"]
-cuda = ["candle-core/cuda", "dep:candle-flash-attn"]
-metal = ["candle-core/metal"]
+cuda = [
+  "candle-core/cuda",
+  "candle-nn/cuda",
+  "dep:candle-flash-attn",
+]
+metal = [
+  "candle-core/metal",
+  "candle-nn/metal",
+]
