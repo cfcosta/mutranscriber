@@ -65,13 +65,14 @@ impl RotaryEmbedding {
         })
     }
 
+    /// Apply rotary embeddings to Q and K in (batch, seq, heads, dim) layout.
     fn apply(
         &self,
         q: &Tensor,
         k: &Tensor,
         offset: usize,
     ) -> Result<(Tensor, Tensor)> {
-        let (_, _, seq_len, _) = q.dims4()?;
+        let (_, seq_len, _, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?;
         let sin = self.sin.narrow(0, offset, seq_len)?;
         let q_embed = Self::rope(&q.contiguous()?, &cos, &sin)?;
@@ -80,6 +81,7 @@ impl RotaryEmbedding {
     }
 
     /// CUDA-compatible rotary position embedding using basic tensor ops.
+    /// Expects input in (batch, seq, heads, dim) layout.
     fn rope(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
         let (_, _, _, d) = x.dims4()?;
         let half_d = d / 2;
@@ -88,9 +90,10 @@ impl RotaryEmbedding {
         let x1 = x.narrow(3, 0, half_d)?;
         let x2 = x.narrow(3, half_d, half_d)?;
 
-        // Broadcast cos/sin to match tensor shape: (seq, half_d) -> (b, h, seq, half_d)
-        let cos = cos.unsqueeze(0)?.unsqueeze(0)?;
-        let sin = sin.unsqueeze(0)?.unsqueeze(0)?;
+        // Broadcast cos/sin to match (batch, seq, heads, half_d) layout
+        // (seq, half_d) -> (1, seq, 1, half_d)
+        let cos = cos.unsqueeze(0)?.unsqueeze(2)?;
+        let sin = sin.unsqueeze(0)?.unsqueeze(2)?;
 
         // Apply rotation: [x1, x2] -> [x1*cos - x2*sin, x2*cos + x1*sin]
         let y1 = x1
@@ -215,29 +218,23 @@ impl Attention {
         let k = self.k_proj.forward(x)?;
         let v = self.v_proj.forward(x)?;
 
-        // Reshape to (batch, seq, num_heads, head_dim)
+        // Reshape to (batch, seq, num_heads, head_dim) — already the layout
+        // flash_attn and our KV cache expect, so no transposes needed on CUDA.
         let q = q.reshape((batch, seq_len, self.num_heads, self.head_dim))?;
         let k =
             k.reshape((batch, seq_len, self.num_kv_heads, self.head_dim))?;
         let v =
             v.reshape((batch, seq_len, self.num_kv_heads, self.head_dim))?;
 
-        // Apply QK normalization
+        // Apply QK normalization (operates on last dim = head_dim)
         let q = self.q_norm.forward(&q)?;
         let k = self.k_norm.forward(&k)?;
 
-        // Transpose to (batch, num_heads, seq, head_dim) for RoPE
-        let q = q.transpose(1, 2)?;
-        let k = k.transpose(1, 2)?;
-        let v = v.transpose(1, 2)?;
-
-        // Apply rotary embeddings
+        // Apply rotary embeddings directly on (batch, seq, heads, dim) — no transpose needed
         let (q, k) = self.rotary.apply(&q, &k, offset)?;
 
-        // Transpose K/V to cache layout: (batch, seq, heads, dim)
-        // This is what flash_attn expects — only the new token(s) need contiguous()
-        let k = k.transpose(1, 2)?.contiguous()?;
-        let v = v.transpose(1, 2)?.contiguous()?;
+        // V is already in cache layout from reshape — contiguous, no transpose needed.
+        // K comes from RoPE's Tensor::cat which produces a contiguous result.
 
         // Pre-allocated KV cache in (batch, MAX_SEQ_LEN, num_kv_heads, head_dim)
         if self.k_cache.is_none() {
@@ -261,18 +258,15 @@ impl Attention {
         v_cache.slice_set(&v, 1, self.cache_len)?;
         self.cache_len += seq_len;
 
-        // Flash attention path (CUDA only) — cache is already in (batch, seq, heads, dim)
+        // Flash attention path (CUDA only) — everything already in (batch, seq, heads, dim)
         #[cfg(feature = "cuda")]
         {
             if q.device().is_cuda() {
                 let k_full = k_cache.narrow(1, 0, self.cache_len)?;
                 let v_full = v_cache.narrow(1, 0, self.cache_len)?;
-                // Q needs transpose from (batch, heads, seq, dim) to (batch, seq, heads, dim)
-                let q = q.transpose(1, 2)?.contiguous()?;
                 let scale = (self.head_dim as f32).powf(-0.5);
                 let out =
                     candle_flash_attn::flash_attn(&q, &k_full, &v_full, scale, true)?;
-                // out: (batch, seq_q, num_heads, head_dim)
                 let out = out.reshape((
                     batch,
                     seq_len,
@@ -282,7 +276,8 @@ impl Attention {
             }
         }
 
-        // CPU/Metal fallback: transpose cache to (batch, heads, seq, dim) for naive attention
+        // CPU/Metal fallback: transpose to (batch, heads, seq, dim) for naive matmul attention
+        let q = q.transpose(1, 2)?.contiguous()?;
         let k_full = k_cache.narrow(1, 0, self.cache_len)?.transpose(1, 2)?.contiguous()?;
         let v_full = v_cache.narrow(1, 0, self.cache_len)?.transpose(1, 2)?.contiguous()?;
 
