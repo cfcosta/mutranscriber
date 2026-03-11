@@ -98,6 +98,7 @@ pub struct Qwen3ASRModel {
     config: Qwen3ASRConfig,
     generation_config: crate::config::GenerationConfig,
     device: Device,
+    dtype: DType,
 }
 
 impl Qwen3ASRModel {
@@ -290,10 +291,12 @@ impl Qwen3ASRModel {
         device: &Device,
     ) -> Result<Self> {
         // Load model weights (supports both single file and sharded weights)
+        // Use BF16 on CUDA for ~2x faster inference via tensor cores; F32 on CPU
+        let dtype = if device.is_cuda() { DType::BF16 } else { DType::F32 };
         let path_refs: Vec<&Path> =
             model_paths.iter().map(|p: &PathBuf| p.as_path()).collect();
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&path_refs, DType::F32, device)?
+            VarBuilder::from_mmaped_safetensors(&path_refs, dtype, device)?
         };
 
         // Model uses "thinker" prefix for all weights
@@ -319,6 +322,7 @@ impl Qwen3ASRModel {
             config,
             generation_config: crate::config::GenerationConfig::default(),
             device: device.clone(),
+            dtype,
         })
     }
 
@@ -352,8 +356,8 @@ impl Qwen3ASRModel {
             ))
         })?;
 
-        // Mel spectrogram statistics
-        let mel_flat = mel.flatten_all()?;
+        // Mel spectrogram statistics (cast to F32 for extraction)
+        let mel_flat = mel.flatten_all()?.to_dtype(DType::F32)?;
         let mel_vec = mel_flat.to_vec1::<f32>()?;
         let mel_mean: f32 = mel_vec.iter().sum::<f32>() / mel_vec.len() as f32;
         let mel_min = mel_vec.iter().cloned().fold(f32::INFINITY, f32::min);
@@ -366,13 +370,14 @@ impl Qwen3ASRModel {
         // First frame of mel (for detailed comparison)
         let mel_first_frame: Vec<f32> = mel
             .i((0, .., 0))?
+            .to_dtype(DType::F32)?
             .to_vec1::<f32>()?
             .into_iter()
             .take(16)
             .collect();
 
-        // Audio features statistics
-        let af_flat = audio_features.flatten_all()?;
+        // Audio features statistics (cast to F32 for extraction)
+        let af_flat = audio_features.flatten_all()?.to_dtype(DType::F32)?;
         let af_vec = af_flat.to_vec1::<f32>()?;
         let af_mean: f32 = af_vec.iter().sum::<f32>() / af_vec.len() as f32;
         let af_min = af_vec.iter().cloned().fold(f32::INFINITY, f32::min);
@@ -385,6 +390,7 @@ impl Qwen3ASRModel {
         // First frame of audio features (for detailed comparison)
         let af_first_frame: Vec<f32> = audio_features
             .i((0, 0, ..))?
+            .to_dtype(DType::F32)?
             .to_vec1::<f32>()?
             .into_iter()
             .take(16)
@@ -496,6 +502,7 @@ impl Qwen3ASRModel {
         let mel =
             Tensor::from_vec(mel_data, (1, n_frames, n_mels), &self.device)?;
         let mel = mel.transpose(1, 2)?; // (1, n_mels, n_frames)
+        let mel = mel.to_dtype(self.dtype)?; // cast to model dtype (BF16 on GPU)
         tracing::debug!("Mel tensor shape: {:?}", mel.dims());
 
         // Encode audio
@@ -790,6 +797,9 @@ impl Qwen3ASRModel {
                 logits.argmax(candle_core::D::Minus1)?.to_vec1::<u32>()?[0];
             return Ok(token);
         }
+
+        // Cast to F32 for CPU-side sampling operations
+        let logits = logits.to_dtype(DType::F32)?;
 
         // Apply repetition penalty if configured
         let logits = if let Some(penalty) = gen_config.repetition_penalty {
