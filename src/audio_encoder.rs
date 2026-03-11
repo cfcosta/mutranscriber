@@ -201,20 +201,38 @@ impl MultiHeadAttention {
         let k = self.k_proj.forward(x)?;
         let v = self.v_proj.forward(x)?;
 
-        // Reshape to (batch, n_heads, seq_len, head_dim)
-        // contiguous() is required after transpose for matmul on CPU
-        let q = q
-            .reshape((batch_size, seq_len, self.n_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let k = k
-            .reshape((batch_size, seq_len, self.n_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let v = v
-            .reshape((batch_size, seq_len, self.n_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+        // Reshape to (batch, seq_len, n_heads, head_dim)
+        let q =
+            q.reshape((batch_size, seq_len, self.n_heads, self.head_dim))?;
+        let k =
+            k.reshape((batch_size, seq_len, self.n_heads, self.head_dim))?;
+        let v =
+            v.reshape((batch_size, seq_len, self.n_heads, self.head_dim))?;
+
+        // Flash attention path (CUDA only) — bidirectional, no causal mask
+        #[cfg(feature = "cuda")]
+        {
+            if q.device().is_cuda() {
+                let q = q.contiguous()?;
+                let k = k.contiguous()?;
+                let v = v.contiguous()?;
+                let scale = self.scale as f32;
+                let out = candle_flash_attn::flash_attn(
+                    &q, &k, &v, scale, false,
+                )?;
+                let out = out.reshape((
+                    batch_size,
+                    seq_len,
+                    self.n_heads * self.head_dim,
+                ))?;
+                return self.out_proj.forward(&out);
+            }
+        }
+
+        // CPU/Metal fallback: transpose to (batch, n_heads, seq_len, head_dim)
+        let q = q.transpose(1, 2)?.contiguous()?;
+        let k = k.transpose(1, 2)?.contiguous()?;
+        let v = v.transpose(1, 2)?.contiguous()?;
 
         // Scaled dot-product attention
         let attn_weights = q.matmul(&k.transpose(2, 3)?)?;

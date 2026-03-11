@@ -234,17 +234,20 @@ impl Attention {
         // Apply rotary embeddings
         let (q, k) = self.rotary.apply(&q, &k, offset)?;
 
-        // Pre-allocated KV cache: allocate on first use, then slice_set for O(1) writes
-        let k = k.contiguous()?;
-        let v = v.contiguous()?;
+        // Transpose K/V to cache layout: (batch, seq, heads, dim)
+        // This is what flash_attn expects — only the new token(s) need contiguous()
+        let k = k.transpose(1, 2)?.contiguous()?;
+        let v = v.transpose(1, 2)?.contiguous()?;
+
+        // Pre-allocated KV cache in (batch, MAX_SEQ_LEN, num_kv_heads, head_dim)
         if self.k_cache.is_none() {
             let k_buf = Tensor::zeros(
-                (batch, self.num_kv_heads, MAX_SEQ_LEN, self.head_dim),
+                (batch, MAX_SEQ_LEN, self.num_kv_heads, self.head_dim),
                 k.dtype(),
                 k.device(),
             )?;
             let v_buf = Tensor::zeros(
-                (batch, self.num_kv_heads, MAX_SEQ_LEN, self.head_dim),
+                (batch, MAX_SEQ_LEN, self.num_kv_heads, self.head_dim),
                 v.dtype(),
                 v.device(),
             )?;
@@ -254,24 +257,21 @@ impl Attention {
 
         let k_cache = self.k_cache.as_ref().unwrap();
         let v_cache = self.v_cache.as_ref().unwrap();
-        k_cache.slice_set(&k, 2, self.cache_len)?;
-        v_cache.slice_set(&v, 2, self.cache_len)?;
+        k_cache.slice_set(&k, 1, self.cache_len)?;
+        v_cache.slice_set(&v, 1, self.cache_len)?;
         self.cache_len += seq_len;
 
-        let k_full = k_cache.narrow(2, 0, self.cache_len)?;
-        let v_full = v_cache.narrow(2, 0, self.cache_len)?;
-
-        // Flash attention path (CUDA only) — handles GQA natively, no mask needed
+        // Flash attention path (CUDA only) — cache is already in (batch, seq, heads, dim)
         #[cfg(feature = "cuda")]
         {
             if q.device().is_cuda() {
-                // flash_attn expects (batch, seq, heads, dim)
+                let k_full = k_cache.narrow(1, 0, self.cache_len)?;
+                let v_full = v_cache.narrow(1, 0, self.cache_len)?;
+                // Q needs transpose from (batch, heads, seq, dim) to (batch, seq, heads, dim)
                 let q = q.transpose(1, 2)?.contiguous()?;
-                let k = k_full.transpose(1, 2)?.contiguous()?;
-                let v = v_full.transpose(1, 2)?.contiguous()?;
                 let scale = (self.head_dim as f32).powf(-0.5);
                 let out =
-                    candle_flash_attn::flash_attn(&q, &k, &v, scale, true)?;
+                    candle_flash_attn::flash_attn(&q, &k_full, &v_full, scale, true)?;
                 // out: (batch, seq_q, num_heads, head_dim)
                 let out = out.reshape((
                     batch,
@@ -282,7 +282,11 @@ impl Attention {
             }
         }
 
-        // CPU/Metal fallback: naive attention with GQA expansion
+        // CPU/Metal fallback: transpose cache to (batch, heads, seq, dim) for naive attention
+        let k_full = k_cache.narrow(1, 0, self.cache_len)?.transpose(1, 2)?.contiguous()?;
+        let v_full = v_cache.narrow(1, 0, self.cache_len)?.transpose(1, 2)?.contiguous()?;
+
+        // GQA expansion
         let num_groups = self.num_heads / self.num_kv_heads;
         let k = if num_groups > 1 {
             let (b, h, s, d) = k_full.dims4()?;
@@ -453,7 +457,18 @@ impl Qwen3Decoder {
         let (batch, seq_len, _) = embeddings.dims3()?;
 
         let mask = if seq_len > 1 {
-            Some(self.causal_mask(batch, seq_len, offset)?)
+            #[cfg(feature = "cuda")]
+            {
+                if self.device.is_cuda() {
+                    None // flash attention handles causal masking
+                } else {
+                    Some(self.causal_mask(batch, seq_len, offset)?)
+                }
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                Some(self.causal_mask(batch, seq_len, offset)?)
+            }
         } else {
             None
         };
