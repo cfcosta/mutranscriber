@@ -102,10 +102,12 @@ impl Mlp {
     }
 }
 
-/// Maximum sequence length for pre-allocated KV cache.
-const MAX_SEQ_LEN: usize = 2048;
+/// Initial sequence length for the decoder KV cache.
+///
+/// The cache grows on demand when generation exceeds this length.
+const INITIAL_MAX_SEQ_LEN: usize = 2048;
 
-/// Self-attention with pre-allocated KV cache.
+/// Self-attention with a resizable KV cache.
 struct Attention {
     q_proj: Linear,
     k_proj: Linear,
@@ -165,6 +167,55 @@ impl Attention {
         })
     }
 
+    fn ensure_kv_capacity(
+        &mut self,
+        batch: usize,
+        additional_seq_len: usize,
+        k: &Tensor,
+        v: &Tensor,
+    ) -> Result<()> {
+        let required_len = self.cache_len + additional_seq_len;
+        let current_capacity = match &self.k_cache {
+            Some(cache) => cache.dim(1)?,
+            None => 0,
+        };
+
+        if current_capacity >= required_len {
+            return Ok(());
+        }
+
+        let mut new_capacity = current_capacity.max(INITIAL_MAX_SEQ_LEN);
+        while new_capacity < required_len {
+            new_capacity *= 2;
+        }
+
+        let new_k_cache = Tensor::zeros(
+            (batch, new_capacity, self.num_kv_heads, self.head_dim),
+            k.dtype(),
+            k.device(),
+        )?;
+        let new_v_cache = Tensor::zeros(
+            (batch, new_capacity, self.num_kv_heads, self.head_dim),
+            v.dtype(),
+            v.device(),
+        )?;
+
+        if let (Some(old_k_cache), Some(old_v_cache)) =
+            (&self.k_cache, &self.v_cache)
+        {
+            if self.cache_len > 0 {
+                let old_k = old_k_cache.narrow(1, 0, self.cache_len)?;
+                let old_v = old_v_cache.narrow(1, 0, self.cache_len)?;
+                new_k_cache.slice_set(&old_k, 1, 0)?;
+                new_v_cache.slice_set(&old_v, 1, 0)?;
+            }
+        }
+
+        self.k_cache = Some(new_k_cache);
+        self.v_cache = Some(new_v_cache);
+        Ok(())
+    }
+
     fn forward(
         &mut self,
         x: &Tensor,
@@ -193,23 +244,11 @@ impl Attention {
         let (q, k) = self.rotary.apply(&q, &k, offset)?;
 
         // V is already in cache layout from reshape — contiguous, no transpose needed.
-        // K comes from RoPE's Tensor::cat which produces a contiguous result.
+        // K comes from RoPE's result and is contiguous as well.
 
-        // Pre-allocated KV cache in (batch, MAX_SEQ_LEN, num_kv_heads, head_dim)
-        if self.k_cache.is_none() {
-            let k_buf = Tensor::zeros(
-                (batch, MAX_SEQ_LEN, self.num_kv_heads, self.head_dim),
-                k.dtype(),
-                k.device(),
-            )?;
-            let v_buf = Tensor::zeros(
-                (batch, MAX_SEQ_LEN, self.num_kv_heads, self.head_dim),
-                v.dtype(),
-                v.device(),
-            )?;
-            self.k_cache = Some(k_buf);
-            self.v_cache = Some(v_buf);
-        }
+        // Grow the KV cache on demand so long transcripts don't overflow the
+        // initial allocation.
+        self.ensure_kv_capacity(batch, seq_len, &k, &v)?;
 
         let k_cache = self.k_cache.as_ref().unwrap();
         let v_cache = self.v_cache.as_ref().unwrap();
@@ -287,8 +326,8 @@ impl Attention {
     }
 
     fn clear_kv_cache(&mut self) {
-        self.k_cache = None;
-        self.v_cache = None;
+        // Keep the allocated buffers and just reset the logical length so we can
+        // reuse the cache across chunks without reallocating on every chunk.
         self.cache_len = 0;
     }
 }

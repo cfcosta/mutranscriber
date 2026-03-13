@@ -307,7 +307,10 @@ pub struct GenerationConfig {
 impl Default for GenerationConfig {
     fn default() -> Self {
         Self {
-            max_new_tokens: 4096,
+            // 30 seconds of speech should comfortably fit within a few hundred
+            // tokens. A smaller cap prevents pathological long-form repetition
+            // from turning one bad chunk into minutes of extra decoding.
+            max_new_tokens: 512,
             temperature: None, // Greedy decoding by default
             top_k: None,
             top_p: None,
@@ -391,7 +394,7 @@ mod tests {
     #[test]
     fn test_generation_config_default() {
         let config = GenerationConfig::default();
-        assert_eq!(config.max_new_tokens, 4096);
+        assert_eq!(config.max_new_tokens, 512);
         assert!(config.temperature.is_none());
         assert_eq!(config.eos_token_id, 151643);
     }
