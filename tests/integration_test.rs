@@ -185,13 +185,12 @@ async fn test_model_loading() {
 
 /// Full transcription test - requires model download.
 ///
-/// NOTE: The current text generation logic doesn't properly inject audio features
-/// into the LLM. This test verifies the pipeline runs but transcription quality
-/// is not yet validated.
+/// This validates that the end-to-end ASR path produces grounded text for the
+/// bundled LibriVox fixture, not just that the pipeline runs.
 ///
 /// Run with: cargo test --test integration_test test_full_transcription -- --ignored
 #[tokio::test]
-#[ignore] // Requires ~2GB model download and generation logic fixes
+#[ignore] // Requires ~2GB model download
 async fn test_full_transcription() {
     let samples = load_test_audio();
 
@@ -217,17 +216,31 @@ async fn test_full_transcription() {
         .await
         .expect("Transcription failed");
 
-    // The audio is from "The Art of War" by Sun Tzu
-    // Expected content: "The art of war is of vital importance to the State.
-    //                    It is a matter of life and death, a road either to safety or to ruin."
+    // The fixture is a LibriVox intro for The Art of War.
 
     // Verify transcript is not empty
     assert!(!transcript.is_empty(), "Transcript should not be empty");
 
-    // TODO: Once generation logic properly injects audio features, verify content:
-    // let transcript_lower = transcript.to_lowercase();
-    // let expected_keywords = ["war", "art", "state", "life", "death"];
-    // Verify at least 3 keywords present
+    // Allow small wording differences, but require the transcript to stay on
+    // the expected content instead of drifting into hallucinations.
+    let transcript_lower = transcript.to_lowercase();
+    let expected_keywords = [
+        "librevox",
+        "recording",
+        "art",
+        "war",
+        "translated",
+        "lionel",
+    ];
+    let matched = expected_keywords
+        .iter()
+        .filter(|kw| transcript_lower.contains(**kw))
+        .count();
+    assert!(
+        matched >= 3,
+        "Transcript did not match expected fixture content: {}",
+        transcript
+    );
 
     println!("Transcription result: {}", transcript);
 }

@@ -56,7 +56,7 @@ Both scripts generate JSON with the following structure:
     "first_frame_16": [...]
   },
   "audio_features": {
-    "shape": [1, 125, 1024],
+    "shape": [1, 130, 1024],
     "mean": 0.000536,
     "std": 0.015741,
     "min": -0.111874,
@@ -70,8 +70,8 @@ Both scripts generate JSON with the following structure:
 
 | Tensor          | Shape          | Mean   | Std   | Min    | Max   |
 | --------------- | -------------- | ------ | ----- | ------ | ----- |
-| Mel Spectrogram | [1, 128, 998]  | -0.185 | 0.419 | -0.638 | 1.362 |
-| Audio Features  | [1, 125, 1024] | 0.001  | 0.016 | -0.112 | 0.101 |
+| Mel Spectrogram | [1, 128, 998]  | -0.086 | 0.406 | -0.656 | 1.344 |
+| Audio Features  | [1, 130, 1024] | 0.001  | 0.019 | -0.122 | 0.109 |
 
 ## Interpretation
 

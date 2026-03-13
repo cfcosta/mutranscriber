@@ -42,28 +42,40 @@ pub mod special_tokens {
 /// Audio encoder configuration (AuT - Audio Transformer).
 #[derive(Debug, Clone, Deserialize)]
 pub struct AudioEncoderConfig {
-    /// Model dimension (default: 1024)
+    /// Model dimension (default: 896 for 0.6B)
     #[serde(default = "default_d_model")]
     pub d_model: usize,
-    /// Number of encoder layers (default: 24)
+    /// Number of encoder layers.
     #[serde(default = "default_encoder_layers")]
     pub encoder_layers: usize,
-    /// Number of attention heads (default: 16)
+    /// Number of attention heads.
     #[serde(default = "default_encoder_attention_heads")]
     pub encoder_attention_heads: usize,
-    /// FFN dimension (default: 4096)
+    /// FFN dimension.
     #[serde(default = "default_encoder_ffn_dim")]
     pub encoder_ffn_dim: usize,
-    /// Number of mel filterbank bins (default: 128)
+    /// Number of mel filterbank bins.
     #[serde(default = "default_num_mel_bins")]
     pub num_mel_bins: usize,
-    /// Output dimension to LLM (default: 2048)
+    /// Conv downsampling channel count before projection.
+    #[serde(default = "default_downsample_hidden_size")]
+    pub downsample_hidden_size: usize,
+    /// Output dimension to LLM.
     #[serde(default = "default_output_dim")]
     pub output_dim: usize,
-    /// Maximum source positions for positional embeddings (default: 1500)
+    /// Maximum source positions for positional embeddings.
     #[serde(default = "default_max_source_positions")]
     pub max_source_positions: usize,
-    /// Dropout rate (default: 0.0)
+    /// Attention window size in mel frames / 2.
+    #[serde(default = "default_n_window")]
+    pub n_window: usize,
+    /// Inference attention window size in mel frames.
+    #[serde(default = "default_n_window_infer")]
+    pub n_window_infer: usize,
+    /// Chunk batch size for conv inference.
+    #[serde(default = "default_conv_chunksize")]
+    pub conv_chunksize: usize,
+    /// Dropout rate.
     #[serde(default)]
     pub dropout: f64,
 }
@@ -83,11 +95,23 @@ fn default_encoder_ffn_dim() -> usize {
 fn default_num_mel_bins() -> usize {
     128
 }
+fn default_downsample_hidden_size() -> usize {
+    480
+}
 fn default_output_dim() -> usize {
     1024 // Actual Qwen3-ASR-0.6B value
 }
 fn default_max_source_positions() -> usize {
     1500 // From HuggingFace config
+}
+fn default_n_window() -> usize {
+    50
+}
+fn default_n_window_infer() -> usize {
+    800
+}
+fn default_conv_chunksize() -> usize {
+    500
 }
 
 impl Default for AudioEncoderConfig {
@@ -98,8 +122,12 @@ impl Default for AudioEncoderConfig {
             encoder_attention_heads: default_encoder_attention_heads(),
             encoder_ffn_dim: default_encoder_ffn_dim(),
             num_mel_bins: default_num_mel_bins(),
+            downsample_hidden_size: default_downsample_hidden_size(),
             output_dim: default_output_dim(),
             max_source_positions: default_max_source_positions(),
+            n_window: default_n_window(),
+            n_window_infer: default_n_window_infer(),
+            conv_chunksize: default_conv_chunksize(),
             dropout: 0.0,
         }
     }
@@ -254,8 +282,12 @@ impl Qwen3ASRConfig {
                 encoder_attention_heads: 16,
                 encoder_ffn_dim: 4096,
                 num_mel_bins: 128,
+                downsample_hidden_size: 480,
                 output_dim: 2048, // Matches text hidden_size
                 max_source_positions: 1500,
+                n_window: 50,
+                n_window_infer: 800,
+                conv_chunksize: 500,
                 dropout: 0.0,
             },
             text_config: Qwen3Config {

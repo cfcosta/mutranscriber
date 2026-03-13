@@ -253,11 +253,14 @@ impl Qwen3ASRModel {
             ))
         })?;
 
-        // Configure tokenizer with ByteLevel decoder to properly handle GPT-2 BPE
-        // byte-to-unicode mapping (e.g., Ġ for space). Without this, subword tokens
-        // get separated by spaces incorrectly.
+        // Configure GPT-2/Qwen byte-level tokenization exactly enough for prompt
+        // strings such as "assistant" to encode like the official tokenizer.
         let mut tokenizer = Tokenizer::new(bpe);
-        tokenizer.with_decoder(Some(ByteLevel::default()));
+        let byte_level = ByteLevel::default().add_prefix_space(false);
+        tokenizer
+            .with_pre_tokenizer(Some(byte_level))
+            .with_decoder(Some(ByteLevel::default()))
+            .with_post_processor(Some(byte_level.trim_offsets(false)));
 
         Self::load_with_tokenizer(config, tokenizer, model_paths, device)
     }
@@ -315,8 +318,9 @@ impl Qwen3ASRModel {
         // Initialize decoder with embedding injection support
         let decoder = Qwen3Decoder::new(&config.text_config, vb.clone())?;
 
-        // Initialize mel spectrogram extractor
-        let mel_extractor = MelSpectrogram::new();
+        // Use natural-length mel features and pass the true feature length to the
+        // audio tower, matching the official Qwen3-ASR processor/model flow.
+        let mel_extractor = MelSpectrogram::new().without_padding();
 
         Ok(Self {
             audio_encoder,
@@ -511,7 +515,7 @@ impl Qwen3ASRModel {
 
         // Encode audio
         let encode_start = Instant::now();
-        let audio_features = self.audio_encoder.forward(&mel)?;
+        let audio_features = self.audio_encoder.forward(&mel, n_frames)?;
         let encode_time = encode_start.elapsed();
 
         // Validate audio features shape: should be (batch, seq, hidden_size)
