@@ -316,11 +316,10 @@ impl Default for GenerationConfig {
             top_p: None,
             repetition_penalty: None,
             eos_token_id: 151643, // <|endoftext|>
-            // Note: Don't include <|im_end|> (151645) in stop tokens for ASR.
-            // The model generates <|im_end|> after each ChatML response segment,
-            // which would truncate transcription to just one sentence.
-            // For ASR, we only stop on <|endoftext|> (eos_token_id).
-            stop_token_ids: vec![],
+            // ASR output is wrapped in a ChatML assistant message, so stop when
+            // that message terminates instead of continuing into follow-up
+            // special-token scaffolding and hallucinated text.
+            stop_token_ids: vec![special_tokens::IM_END],
         }
     }
 }
@@ -397,6 +396,7 @@ mod tests {
         assert_eq!(config.max_new_tokens, 512);
         assert!(config.temperature.is_none());
         assert_eq!(config.eos_token_id, 151643);
+        assert_eq!(config.stop_token_ids, vec![special_tokens::IM_END]);
     }
 
     #[test]

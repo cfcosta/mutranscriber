@@ -603,27 +603,13 @@ impl Qwen3ASRModel {
         pre_audio_tokens.push(newline_token);
         pre_audio_tokens.push(audio_start_token);
 
-        // Encode language hint tokens for priming the model
-        let language_english_tokens = self
-            .tokenizer
-            .encode("language English", false)
-            .map_err(|e| {
-                candle_core::Error::Msg(format!("Tokenizer error: {}", e))
-            })?;
-
-        // ASR text marker token signals start of transcription output
-        let asr_text_token = special_tokens::ASR_TEXT;
-
-        // Build the prompt sequence after audio
-        // Format: <|audio_end|><|im_end|>\n<|im_start|>assistant\nlanguage English<asr_text>
-        // Adding explicit language hint and ASR marker to prime the model for English transcription
+        // Build the prompt sequence after audio.
+        // Match the official chat template from the model repo:
+        // <|audio_end|><|im_end|>\n<|im_start|>assistant\n
         let mut post_audio_tokens: Vec<u32> =
             vec![audio_end_token, im_end_token, newline_token, im_start_token];
         post_audio_tokens.extend(assistant_tokens.get_ids().iter().copied());
         post_audio_tokens.push(newline_token);
-        post_audio_tokens
-            .extend(language_english_tokens.get_ids().iter().copied());
-        post_audio_tokens.push(asr_text_token);
 
         tracing::debug!("Pre-audio tokens: {:?}", pre_audio_tokens);
         tracing::debug!("Post-audio tokens: {:?}", post_audio_tokens);
@@ -756,10 +742,9 @@ impl Qwen3ASRModel {
                     ))
                 })?;
 
-        // Normalize whitespace
-        // Note: We prime the model with "language English<asr_text>" so it should
-        // start generating the transcription directly. If it still outputs a language
-        // prefix, strip it.
+        // Normalize whitespace.
+        // Some generations still prefix the response with "language <name>", so
+        // strip that if it appears.
         let words: Vec<&str> = text.split_whitespace().collect();
 
         let text = if words.len() >= 2 && words[0] == "language" {
