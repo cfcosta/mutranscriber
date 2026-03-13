@@ -287,7 +287,8 @@ fn extract_audio_sync(
     // filesrc -> decodebin -> audioconvert -> audioresample -> appsink
     let pipeline_str = format!(
         "filesrc location=\"{}\" ! decodebin ! audioconvert ! \
-         audioresample ! audio/x-raw,format=F32LE,rate={},channels=1 ! appsink name=sink",
+         audioresample ! audio/x-raw,format=F32LE,rate={},channels=1 ! \
+         appsink name=sink sync=false async=false",
         path_str, sample_rate
     );
 

@@ -41,9 +41,7 @@ gstreamer = ["dep:gstreamer", "dep:gstreamer-app"]
 cuda = [
   "candle-core/cuda",
   "candle-nn/cuda",
+  "candle-transformers/cuda",
   "dep:candle-flash-attn",
 ]
-metal = [
-  "candle-core/metal",
-  "candle-nn/metal",
-]
+metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
