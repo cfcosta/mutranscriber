@@ -6,7 +6,6 @@ license = "MIT OR Apache-2.0"
 description = "Tool to transcribe video files using Qwen3-ASR"
 
 [dependencies]
-byteorder = "1.5"
 candle-core = "0.9"
 candle-nn = "0.9"
 candle-flash-attn = { version = "0.9", optional = true }
