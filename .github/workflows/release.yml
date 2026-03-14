@@ -36,6 +36,15 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libglib2.0-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev
+
       - name: Bump crate version
         id: version
         shell: bash
