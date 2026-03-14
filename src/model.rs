@@ -3,6 +3,7 @@
 use std::{
     io::Write,
     path::{Path, PathBuf},
+    time::Instant,
 };
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
@@ -677,8 +678,10 @@ impl Qwen3ASRModel {
         let mut generated_tokens = Vec::new();
         let mut position = total_prompt_len;
 
-        let token_gen_start = std::time::Instant::now();
-        for i in 0..gen_config.max_new_tokens {
+        let token_gen_start = Instant::now();
+        for (position, i) in
+            (total_prompt_len..).zip((0..gen_config.max_new_tokens))
+        {
             // Get logits for the last token
             let last_logits = logits.i((.., logits.dim(1)? - 1, ..))?;
 
@@ -717,7 +720,6 @@ impl Qwen3ASRModel {
             let next_input =
                 Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
             logits = self.decoder.forward(&next_input, position)?;
-            position += 1;
         }
 
         let token_gen_time = token_gen_start.elapsed();
