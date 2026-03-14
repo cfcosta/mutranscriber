@@ -676,11 +676,10 @@ impl Qwen3ASRModel {
         );
 
         let mut generated_tokens = Vec::new();
-        let mut position = total_prompt_len;
 
         let token_gen_start = Instant::now();
         for (position, i) in
-            (total_prompt_len..).zip((0..gen_config.max_new_tokens))
+            (total_prompt_len..).zip(0..gen_config.max_new_tokens)
         {
             // Get logits for the last token
             let last_logits = logits.i((.., logits.dim(1)? - 1, ..))?;
