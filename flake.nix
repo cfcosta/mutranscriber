@@ -1,7 +1,6 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
     pre-commit-hooks = {
       url = "github:cachix/pre-commit-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -19,124 +18,121 @@
   outputs =
     {
       nixpkgs,
-      flake-utils,
       pre-commit-hooks,
       rust-overlay,
       treefmt-nix,
       ...
     }:
-    flake-utils.lib.eachDefaultSystem (
-      system:
-      let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ (import rust-overlay) ];
-          config.allowUnfree = true;
-        };
-        inherit (pkgs) mkShell;
+    let
+      supportedSystems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
 
-        rust = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
-
-        rustPlatform = pkgs.makeRustPlatform {
-          rustc = rust;
-          cargo = rust;
-        };
-
-        formatter =
-          (treefmt-nix.lib.evalModule pkgs {
-            projectRootFile = "flake.nix";
-
-            settings = {
-              allow-missing-formatter = true;
-              verbose = 0;
-
-              global.excludes = [ "*.lock" ];
-
-              formatter = {
-                nixfmt.options = [ "--strict" ];
-                rustfmt.package = rust;
+      forEachSupportedSystem =
+        f:
+        nixpkgs.lib.genAttrs supportedSystems (
+          system:
+          f (
+            let
+              pkgs = import nixpkgs {
+                inherit system;
+                overlays = [ (import rust-overlay) ];
+                config.allowUnfree = true;
               };
-            };
 
-            programs = {
-              nixfmt.enable = true;
-              prettier.enable = true;
-              rustfmt = {
-                enable = true;
-                package = rust;
+              rust = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+
+              rustPlatform = pkgs.makeRustPlatform {
+                rustc = rust;
+                cargo = rust;
               };
-              taplo.enable = true;
-            };
-          }).config.build.wrapper;
 
-        cuda = pkgs.symlinkJoin {
-          name = "cuda-redist";
-          paths = with pkgs.cudaPackages; [
-            cuda_cudart
-            cuda_nvcc
-            cudnn
-            pkgs.cudatoolkit
-          ];
-        };
+              formatter =
+                (treefmt-nix.lib.evalModule pkgs {
+                  projectRootFile = "flake.nix";
 
-        # Pre-fetched cutlass headers for candle-flash-attn (can't git clone in Nix sandbox)
-        cutlass-src = pkgs.fetchFromGitHub {
-          owner = "NVIDIA";
-          repo = "cutlass";
-          rev = "7d49e6c7e2f8896c47f586706e67e1fb215529dc";
-          hash = "sha256-D/s7eYsa5l/mfx73tE4mnFcTQdYqGmXa9d9TCryw4e4=";
-        };
-      in
-      {
-        checks.pre-commit-check = pre-commit-hooks.lib.${system}.run {
-          src = ./.;
+                  settings = {
+                    allow-missing-formatter = true;
+                    verbose = 0;
 
-          hooks = {
-            deadnix.enable = true;
-            nixfmt-rfc-style.enable = true;
-            treefmt = {
-              enable = true;
-              package = formatter;
-            };
-          };
-        };
+                    global.excludes = [ "*.lock" ];
 
-        devShells.default = mkShell {
-          name = "mutranscriber";
+                    formatter = {
+                      nixfmt.options = [ "--strict" ];
+                      rustfmt.package = rust;
+                    };
+                  };
 
-          buildInputs = [
-            cuda
-            formatter
-            rust
+                  programs = {
+                    nixfmt.enable = true;
+                    prettier.enable = true;
+                    rustfmt = {
+                      enable = true;
+                      package = rust;
+                    };
+                    taplo.enable = true;
+                  };
+                }).config.build.wrapper;
 
-            pkgs.bacon
-            pkgs.cargo-machete
-            pkgs.cargo-nextest
+              pre-commit-check = pre-commit-hooks.lib.${system}.run {
+                src = ./.;
 
-            pkgs.alsa-lib
-            pkgs.gst_all_1.gst-libav
-            pkgs.gst_all_1.gst-plugins-bad
-            pkgs.gst_all_1.gst-plugins-base
-            pkgs.gst_all_1.gst-plugins-good
-            pkgs.gst_all_1.gst-plugins-ugly
-            pkgs.gst_all_1.gstreamer
-            pkgs.libinput
-            pkgs.libudev-zero
-            pkgs.pipewire
-            pkgs.pkg-config
-          ];
+                hooks = {
+                  deadnix.enable = true;
+                  nixfmt-rfc-style.enable = true;
+                  treefmt = {
+                    enable = true;
+                    package = formatter;
+                  };
+                };
+              };
 
-          CUDA_HOME = if pkgs.stdenv.isLinux then "${cuda}" else "";
-          CUDA_PATH = if pkgs.stdenv.isLinux then "${cuda}" else "";
+              cuda = pkgs.symlinkJoin {
+                name = "cuda-redist";
+                paths = with pkgs.cudaPackages; [
+                  cuda_cudart
+                  cuda_nvcc
+                  cudnn
+                  pkgs.cudatoolkit
+                ];
+              };
 
-          shellHook = ''
-            export LD_LIBRARY_PATH=${cuda}/lib64:${cuda}/lib:$LD_LIBRARY_PATH
-          '';
-        };
-
-        formatter = formatter;
-
-        packages = rec {
+              # Pre-fetched cutlass headers for candle-flash-attn (can't git clone in Nix sandbox)
+              cutlass-src = pkgs.fetchFromGitHub {
+                owner = "NVIDIA";
+                repo = "cutlass";
+                rev = "7d49e6c7e2f8896c47f586706e67e1fb215529dc";
+                hash = "sha256-D/s7eYsa5l/mfx73tE4mnFcTQdYqGmXa9d9TCryw4e4=";
+              };
+            in
+            {
+              inherit
+                system
+                pkgs
+                rust
+                rustPlatform
+                formatter
+                pre-commit-check
+                cuda
+                cutlass-src
+                ;
+            }
+          )
+        );
+    in
+    {
+      packages = forEachSupportedSystem (
+        {
+          pkgs,
+          rustPlatform,
+          cuda,
+          cutlass-src,
+          ...
+        }:
+        rec {
           # CPU-only build (default)
           mutranscriber-cpu = rustPlatform.buildRustPackage {
             pname = "mutranscriber";
@@ -272,7 +268,60 @@
 
           # Default to CPU build
           default = mutranscriber-cpu;
-        };
-      }
-    );
+        }
+      );
+
+      formatter = forEachSupportedSystem ({ formatter, ... }: formatter);
+
+      checks = forEachSupportedSystem (
+        { pre-commit-check, ... }:
+        {
+          inherit pre-commit-check;
+        }
+      );
+
+      devShells = forEachSupportedSystem (
+        {
+          pkgs,
+          rust,
+          formatter,
+          cuda,
+          ...
+        }:
+        {
+          default = pkgs.mkShell {
+            name = "mutranscriber";
+
+            buildInputs = [
+              cuda
+              formatter
+              rust
+
+              pkgs.bacon
+              pkgs.cargo-machete
+              pkgs.cargo-nextest
+
+              pkgs.alsa-lib
+              pkgs.gst_all_1.gst-libav
+              pkgs.gst_all_1.gst-plugins-bad
+              pkgs.gst_all_1.gst-plugins-base
+              pkgs.gst_all_1.gst-plugins-good
+              pkgs.gst_all_1.gst-plugins-ugly
+              pkgs.gst_all_1.gstreamer
+              pkgs.libinput
+              pkgs.libudev-zero
+              pkgs.pipewire
+              pkgs.pkg-config
+            ];
+
+            CUDA_HOME = if pkgs.stdenv.isLinux then "${cuda}" else "";
+            CUDA_PATH = if pkgs.stdenv.isLinux then "${cuda}" else "";
+
+            shellHook = ''
+              export LD_LIBRARY_PATH=${cuda}/lib64:${cuda}/lib:$LD_LIBRARY_PATH
+            '';
+          };
+        }
+      );
+    };
 }
