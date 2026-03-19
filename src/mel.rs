@@ -459,11 +459,11 @@ impl MelSpectrogram {
             for m in 0..self.n_mels {
                 let (range_start, range_end) = self.mel_filters.range(m);
                 let filter = self.mel_filters.nonzero_filter(m);
-                let sum: f32 = magnitudes[range_start..range_end]
-                    .iter()
-                    .zip(filter.iter())
-                    .map(|(&mag, &weight)| mag * weight)
-                    .sum();
+                let magnitudes = &magnitudes[range_start..range_end];
+                let mut sum = 0.0f32;
+                for idx in 0..filter.len() {
+                    sum += magnitudes[idx] * filter[idx];
+                }
                 // Log mel spectrogram with floor (using log10 like Whisper)
                 mel_spec[frame * self.n_mels + m] = (sum.max(1e-10)).log10();
             }

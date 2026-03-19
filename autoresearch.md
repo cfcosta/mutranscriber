@@ -53,3 +53,4 @@ The script builds `src/bin/autoresearch_bench.rs`, runs a warm GPU benchmark via
 - Discarded: folding a sub-1s tail chunk back into earlier chunks also improved throughput, but the shifted chunk boundary changed the long repeated transcript (`tsunzhu` -> `tsunzuo`).
 - Discarded: replacing CUDA flash-attn with a manual matmul/softmax path for single-token decode steps was much slower and changed the transcript.
 - Kept: `MelSpectrogram` now precomputes each mel filter's non-zero range and skips zero-weight bins during filterbank application. This preserves output exactly and cuts the primary metric by about 6-7% on the GPU benchmark because mel extraction was a meaningful share of total runtime.
+- Kept: after trimming each mel filter to its active range, replacing the iterator-heavy zip/map/sum accumulation with a tight indexed loop improved codegen further and reduced the benchmark again without changing transcripts.
