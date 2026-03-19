@@ -6,13 +6,14 @@
 use std::path::PathBuf;
 
 use mutranscriber::{
+    HOP_LENGTH,
     MelSpectrogram,
     ModelVariant,
-    Transcriber,
-    TranscriberConfig,
-    HOP_LENGTH,
     N_MELS,
     SAMPLE_RATE,
+    Transcriber,
+    TranscriberConfig,
+    load_wav_pcm16_mono,
 };
 
 /// Path to the test audio fixture.
@@ -27,21 +28,7 @@ fn test_audio_path() -> PathBuf {
 fn load_test_audio() -> Vec<f32> {
     let path = test_audio_path();
     assert!(path.exists(), "Test audio file not found: {:?}", path);
-
-    // Read WAV file manually (16-bit PCM, 16kHz, mono)
-    let data = std::fs::read(&path).expect("Failed to read test audio file");
-
-    // Skip WAV header (44 bytes for standard PCM WAV)
-    let audio_data = &data[44..];
-
-    // Convert 16-bit PCM to f32 samples
-    audio_data
-        .chunks_exact(2)
-        .map(|chunk| {
-            let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-            sample as f32 / 32768.0
-        })
-        .collect()
+    load_wav_pcm16_mono(&path).expect("Failed to parse test audio file")
 }
 
 #[test]
@@ -49,8 +36,7 @@ fn test_audio_file_exists() {
     let path = test_audio_path();
     assert!(path.exists(), "Test audio fixture missing: {:?}", path);
 
-    let metadata =
-        std::fs::metadata(&path).expect("Failed to read file metadata");
+    let metadata = std::fs::metadata(&path).expect("Failed to read file metadata");
     assert!(metadata.len() > 0, "Test audio file is empty");
 }
 

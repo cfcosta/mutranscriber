@@ -1,7 +1,7 @@
 use std::{path::PathBuf, time::Instant};
 
 use clap::Parser;
-use mutranscriber::{ModelVariant, Transcriber, TranscriberConfig};
+use mutranscriber::{ModelVariant, Transcriber, TranscriberConfig, load_wav_pcm16_mono};
 
 #[derive(Debug, Parser)]
 #[command(name = "autoresearch_bench")]
@@ -29,19 +29,6 @@ struct Args {
     /// Model variant to benchmark
     #[arg(long, default_value = "small")]
     model: String,
-}
-
-fn load_wav_pcm16(path: &std::path::Path) -> anyhow::Result<Vec<f32>> {
-    let data = std::fs::read(path)?;
-    anyhow::ensure!(data.len() >= 44, "wav file too short: {}", path.display());
-    let audio_data = &data[44..];
-    Ok(audio_data
-        .chunks_exact(2)
-        .map(|chunk| {
-            let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-            sample as f32 / 32768.0
-        })
-        .collect())
 }
 
 fn normalize_text(text: &str) -> String {
@@ -74,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
         other => anyhow::bail!("unsupported model variant: {other}"),
     };
 
-    let short_audio = load_wav_pcm16(&args.input)?;
+    let short_audio = load_wav_pcm16_mono(&args.input).map_err(anyhow::Error::msg)?;
     let mut long_audio = Vec::with_capacity(short_audio.len() * args.repeat);
     for _ in 0..args.repeat {
         long_audio.extend_from_slice(&short_audio);

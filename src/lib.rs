@@ -34,25 +34,10 @@ mod mel;
 mod model;
 mod qwen3_decoder;
 mod transcriber;
+mod wav;
 
-pub use config::{
-    special_tokens,
-    AudioEncoderConfig,
-    GenerationConfig,
-    Qwen3ASRConfig,
-};
-pub use mel::{
-    MelSpectrogram,
-    CHUNK_LENGTH,
-    HOP_LENGTH,
-    N_FFT,
-    N_MELS,
-    SAMPLE_RATE,
-};
+pub use config::{AudioEncoderConfig, GenerationConfig, Qwen3ASRConfig, special_tokens};
+pub use mel::{CHUNK_LENGTH, HOP_LENGTH, MelSpectrogram, N_FFT, N_MELS, SAMPLE_RATE};
 pub use model::{ModelVariant, Qwen3ASRModel, Qwen3ASRModelBuilder};
-pub use transcriber::{
-    Transcriber,
-    TranscriberConfig,
-    TranscriberError,
-    TranscriberResult,
-};
+pub use transcriber::{Transcriber, TranscriberConfig, TranscriberError, TranscriberResult};
+pub use wav::load_wav_pcm16_mono;

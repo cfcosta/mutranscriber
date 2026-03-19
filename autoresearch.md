@@ -3,7 +3,7 @@
 ## Objective
 Improve steady-state GPU transcription throughput for the CUDA path in `mutranscriber` without reducing transcription quality.
 
-The benchmark uses the bundled `tests/fixtures/test_audio.wav` fixture and a synthetic 60-second workload formed by repeating that 10-second clip 6 times. This gives a longer, more stable GPU workload while still checking output quality against deterministic reference transcripts.
+The benchmark uses the bundled `tests/fixtures/test_audio.wav` fixture and a synthetic 60-second workload formed by repeating that 10-second clip 6 times. The harness now parses the WAV as a real RIFF file instead of assuming a fixed 44-byte header, so the workload is the actual 10.0-second audio repeated 6 times rather than "audio plus stray metadata bytes".
 
 ## Metrics
 - **Primary**: `wall_ms` (ms, lower is better) — median end-to-end transcription time for the 60-second repeated workload, excluding model preload and compilation.
@@ -46,11 +46,13 @@ The script builds `src/bin/autoresearch_bench.rs`, runs a warm GPU benchmark via
 
 ## What's Been Tried
 - Initial harness setup: added a dedicated GPU benchmark binary and deterministic transcript references for the short fixture and a 6x repeated workload.
-- Baseline observation before the experiment loop: the current CUDA path processes the 60-second repeated workload at about 65x realtime, with exact transcript matches on both reference checks.
 - Runtime quirk: the benchmark must include `/run/opengl-driver/lib` in `LD_LIBRARY_PATH` or Candle picks up the CUDA stub library instead of the real driver.
-- Profiling insight from the harness: steady-state 30-second chunks spend roughly ~56ms in mel extraction, ~2-3ms in the audio encoder, and ~390-420ms in decoder generation. Generation is still the main bottleneck, but mel extraction is large enough to be worth optimizing.
-- Discarded: increasing `Qwen3ASRModel::CHUNK_SAMPLES` from 30s to 120s improved throughput materially, but it changed the long repeated transcript and dropped one repeated segment.
-- Discarded: folding a sub-1s tail chunk back into earlier chunks also improved throughput, but the shifted chunk boundary changed the long repeated transcript (`tsunzhu` -> `tsunzuo`).
-- Discarded: replacing CUDA flash-attn with a manual matmul/softmax path for single-token decode steps was much slower and changed the transcript.
-- Kept: `MelSpectrogram` now precomputes each mel filter's non-zero range and skips zero-weight bins during filterbank application. This preserves output exactly and cuts the primary metric by about 6-7% on the GPU benchmark because mel extraction was a meaningful share of total runtime.
-- Kept: after trimming each mel filter to its active range, replacing the iterator-heavy zip/map/sum accumulation with a tight indexed loop improved codegen further and reduced the benchmark again without changing transcripts.
+- Benchmark correctness fix: the original harness and integration test loader assumed a fixed 44-byte WAV header and accidentally treated extra RIFF metadata bytes as audio. The harness now parses RIFF chunks properly. This changes the workload slightly, so any post-fix measurements belong to a new baseline.
+- On the original benchmark, profiling showed steady-state 30-second chunks spending roughly ~56ms in mel extraction, ~2-3ms in the audio encoder, and ~390-420ms in decoder generation. Generation is still the main bottleneck, but mel extraction was large enough to be worth optimizing.
+- Discarded on the original benchmark: increasing `Qwen3ASRModel::CHUNK_SAMPLES` from 30s to 120s improved throughput materially, but it changed the long repeated transcript and dropped one repeated segment.
+- Discarded on the original benchmark: folding a sub-1s tail chunk back into earlier chunks also improved throughput, but the shifted chunk boundary changed the long repeated transcript (`tsunzhu` -> `tsunzuo`).
+- Discarded on the original benchmark: replacing CUDA flash-attn with a manual matmul/softmax path for single-token decode steps was much slower and changed the transcript.
+- Kept on the original benchmark: `MelSpectrogram` now precomputes each mel filter's non-zero range and skips zero-weight bins during filterbank application.
+- Kept on the original benchmark: after trimming each mel filter to its active range, replacing the iterator-heavy zip/map/sum accumulation with a tight indexed loop improved codegen further without changing transcripts.
+- Discarded mel follow-ups on the original benchmark: precomputed FFT bit-reversal indices, a full-window Hann fast path, unsafe pointer walks, manual four-lane unrolling, forced inlining, and Rayon parallelization all failed to beat the current simple sparse-loop mel implementation.
+- Discarded generation follow-ups on the original benchmark: prompt-embedding caching, segmented prompt/KV prefill, single-token manual attention, non-causal flash-attn for decode, debug-log guarding, shaped `Tensor::from_slice` token creation, and switching CUDA BF16 -> F16 all failed to improve throughput versus the kept baseline.
