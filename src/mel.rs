@@ -16,6 +16,7 @@ pub const N_SAMPLES: usize = CHUNK_LENGTH * SAMPLE_RATE; // 480,000 samples
 /// Pre-computed mel filterbank for 128 bins.
 pub struct MelFilters {
     filters: Vec<f32>,
+    ranges: Vec<(usize, usize)>,
     n_freqs: usize,
 }
 
@@ -24,7 +25,24 @@ impl MelFilters {
     pub fn new(n_mels: usize, n_fft: usize, sample_rate: usize) -> Self {
         let filters = create_mel_filterbank(n_mels, n_fft, sample_rate);
         let n_freqs = n_fft / 2 + 1;
-        Self { filters, n_freqs }
+        let ranges = (0..n_mels)
+            .map(|mel_bin| {
+                let start = mel_bin * n_freqs;
+                let filter = &filters[start..start + n_freqs];
+                let first = filter.iter().position(|&v| v > 0.0).unwrap_or(0);
+                let last = filter
+                    .iter()
+                    .rposition(|&v| v > 0.0)
+                    .map(|idx| idx + 1)
+                    .unwrap_or(first);
+                (first, last)
+            })
+            .collect();
+        Self {
+            filters,
+            ranges,
+            n_freqs,
+        }
     }
 
     /// Create default 128-bin mel filterbank.
@@ -50,6 +68,21 @@ impl MelFilters {
     pub fn get_filter(&self, mel_bin: usize) -> &[f32] {
         let start = mel_bin * self.n_freqs;
         &self.filters[start..start + self.n_freqs]
+    }
+
+    /// Get the non-zero filter range for a specific mel bin.
+    #[inline]
+    pub fn range(&self, mel_bin: usize) -> (usize, usize) {
+        self.ranges[mel_bin]
+    }
+
+    /// Get the non-zero filter weights for a mel bin.
+    #[inline]
+    pub fn nonzero_filter(&self, mel_bin: usize) -> &[f32] {
+        let (range_start, range_end) = self.range(mel_bin);
+        let row_start = mel_bin * self.n_freqs + range_start;
+        let row_end = mel_bin * self.n_freqs + range_end;
+        &self.filters[row_start..row_end]
     }
 
     /// Get the number of frequency bins.
@@ -115,11 +148,7 @@ fn mel_to_hz(mel: f64) -> f64 {
 
 /// Create triangular mel filterbank matrix.
 /// Uses the same approach as librosa and WhisperFeatureExtractor.
-fn create_mel_filterbank(
-    n_mels: usize,
-    n_fft: usize,
-    sample_rate: usize,
-) -> Vec<f32> {
+fn create_mel_filterbank(n_mels: usize, n_fft: usize, sample_rate: usize) -> Vec<f32> {
     let n_freqs = n_fft / 2 + 1;
     let mut filters = vec![0.0f32; n_mels * n_freqs];
 
@@ -135,8 +164,7 @@ fn create_mel_filterbank(
         .collect();
 
     // Convert mel points back to Hz
-    let hz_points: Vec<f64> =
-        mel_points.iter().map(|&m| mel_to_hz(m)).collect();
+    let hz_points: Vec<f64> = mel_points.iter().map(|&m| mel_to_hz(m)).collect();
 
     // Convert Hz to FFT bin indices using floating point for interpolation
     // This is the key fix: use f64 for bin positions to enable proper interpolation
@@ -174,8 +202,7 @@ fn create_mel_filterbank(
 
     // Normalize filters (slaney normalization)
     for m in 0..n_mels {
-        let enorm = 2.0
-            / (mel_to_hz(mel_points[m + 2]) - mel_to_hz(mel_points[m])) as f32;
+        let enorm = 2.0 / (mel_to_hz(mel_points[m + 2]) - mel_to_hz(mel_points[m])) as f32;
         for k in 0..n_freqs {
             filters[m * n_freqs + k] *= enorm;
         }
@@ -192,9 +219,7 @@ pub struct HannWindow {
 impl HannWindow {
     pub fn new(size: usize) -> Self {
         let window: Vec<f32> = (0..size)
-            .map(|i| {
-                0.5 * (1.0 - (2.0 * PI * i as f64 / size as f64).cos()) as f32
-            })
+            .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f64 / size as f64).cos()) as f32)
             .collect();
         Self { window }
     }
@@ -265,9 +290,7 @@ impl Fft {
     pub fn magnitude_spectrum(&self, input: &[f32], output: &mut [f32]) {
         let mut real = vec![0.0f32; self.size];
         let mut imag = vec![0.0f32; self.size];
-        self.magnitude_spectrum_with_buffers(
-            input, output, &mut real, &mut imag,
-        );
+        self.magnitude_spectrum_with_buffers(input, output, &mut real, &mut imag);
     }
 
     fn fft_inplace(&self, real: &mut [f32], imag: &mut [f32]) {
@@ -336,17 +359,11 @@ impl MelSpectrogram {
     /// Pads audio to 30 seconds (480,000 samples) by default to match
     /// WhisperFeatureExtractor behavior.
     pub fn new() -> Self {
-        Self::with_params(N_MELS, N_FFT, HOP_LENGTH, SAMPLE_RATE)
-            .with_padding(N_SAMPLES)
+        Self::with_params(N_MELS, N_FFT, HOP_LENGTH, SAMPLE_RATE).with_padding(N_SAMPLES)
     }
 
     /// Create mel spectrogram extractor with custom parameters.
-    pub fn with_params(
-        n_mels: usize,
-        n_fft: usize,
-        hop_length: usize,
-        sample_rate: usize,
-    ) -> Self {
+    pub fn with_params(n_mels: usize, n_fft: usize, hop_length: usize, sample_rate: usize) -> Self {
         // Round up n_fft to next power of 2 for Fft
         let fft_size = n_fft.next_power_of_two();
 
@@ -401,8 +418,7 @@ impl MelSpectrogram {
         };
 
         let audio_len = audio.len();
-        let n_frames =
-            (audio_len.saturating_sub(self.n_fft)) / self.hop_length + 1;
+        let n_frames = (audio_len.saturating_sub(self.n_fft)) / self.hop_length + 1;
 
         if n_frames == 0 {
             return vec![0.0; self.n_mels];
@@ -438,12 +454,15 @@ impl MelSpectrogram {
                 &mut fft_imag,
             );
 
-            // Apply mel filterbank
+            // Apply mel filterbank, skipping the zero-weight regions of each
+            // triangular filter.
             for m in 0..self.n_mels {
-                let sum: f32 = magnitudes[..n_freqs]
+                let (range_start, range_end) = self.mel_filters.range(m);
+                let filter = self.mel_filters.nonzero_filter(m);
+                let sum: f32 = magnitudes[range_start..range_end]
                     .iter()
-                    .enumerate()
-                    .map(|(k, &mag)| mag * self.mel_filters.get(m, k))
+                    .zip(filter.iter())
+                    .map(|(&mag, &weight)| mag * weight)
                     .sum();
                 // Log mel spectrogram with floor (using log10 like Whisper)
                 mel_spec[frame * self.n_mels + m] = (sum.max(1e-10)).log10();
@@ -453,8 +472,7 @@ impl MelSpectrogram {
         // Whisper-style normalization:
         // 1. Clamp to (max - 8.0) to limit dynamic range
         // 2. Normalize to roughly [-1, 1] range
-        let max_val =
-            mel_spec.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let max_val = mel_spec.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         for v in &mut mel_spec {
             // Clamp minimum to max - 8.0 (80dB dynamic range)
             *v = v.max(max_val - 8.0);
@@ -526,9 +544,7 @@ mod tests {
 
         // Create 1 second of 440Hz sine wave
         let audio: Vec<f32> = (0..16000)
-            .map(|i| {
-                (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16000.0).sin()
-            })
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16000.0).sin())
             .collect();
 
         let result = mel_spec.compute(&audio);
