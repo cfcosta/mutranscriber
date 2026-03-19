@@ -6,15 +6,7 @@
 use std::sync::Arc;
 
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{
-    embedding,
-    linear_no_bias,
-    rms_norm,
-    rotary_emb,
-    Embedding,
-    Linear,
-    VarBuilder,
-};
+use candle_nn::{Embedding, Linear, VarBuilder, embedding, linear_no_bias, rms_norm, rotary_emb};
 use candle_transformers::models::qwen3::Config;
 
 /// RMS normalization.
@@ -38,8 +30,7 @@ impl RotaryEmbedding {
             .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
             .collect();
         let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?
-            .to_dtype(DType::F32)?;
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(DType::F32)?;
         let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
             .to_dtype(DType::F32)?
             .reshape((max_seq_len, 1))?;
@@ -51,12 +42,7 @@ impl RotaryEmbedding {
     }
 
     /// Apply rotary embeddings to Q and K in (batch, seq, heads, dim) layout.
-    fn apply(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        offset: usize,
-    ) -> Result<(Tensor, Tensor)> {
+    fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
         let (_, seq_len, _, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?;
         let sin = self.sin.narrow(0, offset, seq_len)?;
@@ -76,21 +62,9 @@ struct Mlp {
 impl Mlp {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
-            gate_proj: linear_no_bias(
-                cfg.hidden_size,
-                cfg.intermediate_size,
-                vb.pp("gate_proj"),
-            )?,
-            up_proj: linear_no_bias(
-                cfg.hidden_size,
-                cfg.intermediate_size,
-                vb.pp("up_proj"),
-            )?,
-            down_proj: linear_no_bias(
-                cfg.intermediate_size,
-                cfg.hidden_size,
-                vb.pp("down_proj"),
-            )?,
+            gate_proj: linear_no_bias(cfg.hidden_size, cfg.intermediate_size, vb.pp("gate_proj"))?,
+            up_proj: linear_no_bias(cfg.hidden_size, cfg.intermediate_size, vb.pp("up_proj"))?,
+            down_proj: linear_no_bias(cfg.intermediate_size, cfg.hidden_size, vb.pp("down_proj"))?,
         })
     }
 
@@ -125,36 +99,16 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(
-        cfg: &Config,
-        rotary: Arc<RotaryEmbedding>,
-        vb: VarBuilder,
-    ) -> Result<Self> {
+    fn new(cfg: &Config, rotary: Arc<RotaryEmbedding>, vb: VarBuilder) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim;
 
         Ok(Self {
-            q_proj: linear_no_bias(
-                cfg.hidden_size,
-                num_heads * head_dim,
-                vb.pp("q_proj"),
-            )?,
-            k_proj: linear_no_bias(
-                cfg.hidden_size,
-                num_kv_heads * head_dim,
-                vb.pp("k_proj"),
-            )?,
-            v_proj: linear_no_bias(
-                cfg.hidden_size,
-                num_kv_heads * head_dim,
-                vb.pp("v_proj"),
-            )?,
-            o_proj: linear_no_bias(
-                num_heads * head_dim,
-                cfg.hidden_size,
-                vb.pp("o_proj"),
-            )?,
+            q_proj: linear_no_bias(cfg.hidden_size, num_heads * head_dim, vb.pp("q_proj"))?,
+            k_proj: linear_no_bias(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?,
+            v_proj: linear_no_bias(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?,
+            o_proj: linear_no_bias(num_heads * head_dim, cfg.hidden_size, vb.pp("o_proj"))?,
             q_norm: rms_norm(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?,
             k_norm: rms_norm(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?,
             num_heads,
@@ -200,9 +154,7 @@ impl Attention {
             v.device(),
         )?;
 
-        if let (Some(old_k_cache), Some(old_v_cache)) =
-            (&self.k_cache, &self.v_cache)
-        {
+        if let (Some(old_k_cache), Some(old_v_cache)) = (&self.k_cache, &self.v_cache) {
             if self.cache_len > 0 {
                 let old_k = old_k_cache.narrow(1, 0, self.cache_len)?;
                 let old_v = old_v_cache.narrow(1, 0, self.cache_len)?;
@@ -216,12 +168,7 @@ impl Attention {
         Ok(())
     }
 
-    fn forward(
-        &mut self,
-        x: &Tensor,
-        mask: Option<&Tensor>,
-        offset: usize,
-    ) -> Result<Tensor> {
+    fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         let (batch, seq_len, _) = x.dims3()?;
 
         let q = self.q_proj.forward(x)?;
@@ -231,10 +178,8 @@ impl Attention {
         // Reshape to (batch, seq, num_heads, head_dim) — already the layout
         // flash_attn and our KV cache expect, so no transposes needed on CUDA.
         let q = q.reshape((batch, seq_len, self.num_heads, self.head_dim))?;
-        let k =
-            k.reshape((batch, seq_len, self.num_kv_heads, self.head_dim))?;
-        let v =
-            v.reshape((batch, seq_len, self.num_kv_heads, self.head_dim))?;
+        let k = k.reshape((batch, seq_len, self.num_kv_heads, self.head_dim))?;
+        let v = v.reshape((batch, seq_len, self.num_kv_heads, self.head_dim))?;
 
         // Apply QK normalization (operates on last dim = head_dim)
         let q = self.q_norm.forward(&q)?;
@@ -263,14 +208,8 @@ impl Attention {
                 let k_full = k_cache.narrow(1, 0, self.cache_len)?;
                 let v_full = v_cache.narrow(1, 0, self.cache_len)?;
                 let scale = (self.head_dim as f32).powf(-0.5);
-                let out = candle_flash_attn::flash_attn(
-                    &q, &k_full, &v_full, scale, true,
-                )?;
-                let out = out.reshape((
-                    batch,
-                    seq_len,
-                    self.num_heads * self.head_dim,
-                ))?;
+                let out = candle_flash_attn::flash_attn(&q, &k_full, &v_full, scale, true)?;
+                let out = out.reshape((batch, seq_len, self.num_heads * self.head_dim))?;
                 return self.o_proj.forward(&out);
             }
         }
@@ -317,11 +256,9 @@ impl Attention {
         let attn = candle_nn::ops::softmax(&attn, candle_core::D::Minus1)?;
 
         let out = attn.matmul(&v)?;
-        let out = out.transpose(1, 2)?.reshape((
-            batch,
-            seq_len,
-            self.num_heads * self.head_dim,
-        ))?;
+        let out = out
+            .transpose(1, 2)?
+            .reshape((batch, seq_len, self.num_heads * self.head_dim))?;
         self.o_proj.forward(&out)
     }
 
@@ -341,19 +278,11 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(
-        cfg: &Config,
-        rotary: Arc<RotaryEmbedding>,
-        vb: VarBuilder,
-    ) -> Result<Self> {
+    fn new(cfg: &Config, rotary: Arc<RotaryEmbedding>, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             self_attn: Attention::new(cfg, rotary, vb.pp("self_attn"))?,
             mlp: Mlp::new(cfg, vb.pp("mlp"))?,
-            input_layernorm: rms_norm(
-                cfg.hidden_size,
-                cfg.rms_norm_eps,
-                vb.pp("input_layernorm"),
-            )?,
+            input_layernorm: rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?,
             post_attention_layernorm: rms_norm(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
@@ -362,12 +291,7 @@ impl DecoderLayer {
         })
     }
 
-    fn forward(
-        &mut self,
-        x: &Tensor,
-        mask: Option<&Tensor>,
-        offset: usize,
-    ) -> Result<Tensor> {
+    fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         let residual = x.clone();
         let x = self.input_layernorm.forward(x)?;
         let x = self.self_attn.forward(&x, mask, offset)?;
@@ -397,26 +321,16 @@ pub struct Qwen3Decoder {
 impl Qwen3Decoder {
     /// Load decoder from pretrained weights.
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let embed_tokens = embedding(
-            cfg.vocab_size,
-            cfg.hidden_size,
-            vb.pp("model.embed_tokens"),
-        )?;
-        let rotary =
-            Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?);
+        let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
+        let rotary = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?);
 
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_layers = vb.pp("model.layers");
         for i in 0..cfg.num_hidden_layers {
-            layers.push(DecoderLayer::new(
-                cfg,
-                rotary.clone(),
-                vb_layers.pp(i),
-            )?);
+            layers.push(DecoderLayer::new(cfg, rotary.clone(), vb_layers.pp(i))?);
         }
 
-        let norm =
-            rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
+        let norm = rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
 
         // lm_head is tied with embed_tokens for Qwen3
         let lm_head = if cfg.tie_word_embeddings {
@@ -436,21 +350,13 @@ impl Qwen3Decoder {
     }
 
     /// Forward pass with token IDs.
-    pub fn forward(
-        &mut self,
-        input_ids: &Tensor,
-        offset: usize,
-    ) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor, offset: usize) -> Result<Tensor> {
         let embeddings = self.embed_tokens.forward(input_ids)?;
         self.forward_embeds(&embeddings, offset)
     }
 
     /// Forward pass with pre-computed embeddings (for multimodal input).
-    pub fn forward_embeds(
-        &mut self,
-        embeddings: &Tensor,
-        offset: usize,
-    ) -> Result<Tensor> {
+    pub fn forward_embeds(&mut self, embeddings: &Tensor, offset: usize) -> Result<Tensor> {
         let (batch, seq_len, _) = embeddings.dims3()?;
 
         let mask = if seq_len > 1 {
@@ -476,8 +382,13 @@ impl Qwen3Decoder {
         }
 
         let h = self.norm.forward(&h)?;
-        // Only take the last token's logits
-        let h = h.narrow(1, seq_len - 1, 1)?;
+        // During autoregressive decode we almost always have seq_len == 1, so
+        // avoid building a redundant narrow view in that hot path.
+        let h = if seq_len == 1 {
+            h
+        } else {
+            h.narrow(1, seq_len - 1, 1)?
+        };
         self.lm_head.forward(&h)
     }
 
@@ -495,12 +406,7 @@ impl Qwen3Decoder {
     }
 
     /// Create causal attention mask.
-    fn causal_mask(
-        &self,
-        batch: usize,
-        seq_len: usize,
-        offset: usize,
-    ) -> Result<Tensor> {
+    fn causal_mask(&self, batch: usize, seq_len: usize, offset: usize) -> Result<Tensor> {
         let total_len = seq_len + offset;
         let mask: Vec<f32> = (0..seq_len)
             .flat_map(|i| {
@@ -513,7 +419,6 @@ impl Qwen3Decoder {
                 })
             })
             .collect();
-        Tensor::from_slice(&mask, (batch, 1, seq_len, total_len), &self.device)?
-            .to_dtype(self.dtype)
+        Tensor::from_slice(&mask, (batch, 1, seq_len, total_len), &self.device)?.to_dtype(self.dtype)
     }
 }
