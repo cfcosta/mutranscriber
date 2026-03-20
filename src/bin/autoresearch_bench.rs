@@ -42,7 +42,7 @@ fn normalize_text(text: &str) -> String {
 fn median_ms(times_ms: &mut [f64]) -> f64 {
     times_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mid = times_ms.len() / 2;
-    if times_ms.len() % 2 == 0 {
+    if times_ms.len().is_multiple_of(2) {
         (times_ms[mid - 1] + times_ms[mid]) / 2.0
     } else {
         times_ms[mid]

@@ -52,12 +52,6 @@ impl MelFilters {
         Self::new(N_MELS, N_FFT, SAMPLE_RATE)
     }
 
-    /// Get filter value at (mel_bin, fft_bin).
-    #[inline]
-    pub fn get(&self, mel_bin: usize, fft_bin: usize) -> f32 {
-        self.filters[mel_bin * self.n_freqs + fft_bin]
-    }
-
     #[cfg(test)]
     pub fn n_mels(&self) -> usize {
         self.filters.len() / self.n_freqs
@@ -430,7 +424,6 @@ impl MelSpectrogram {
 
         let mut mel_spec = vec![0.0f32; n_frames * self.n_mels];
         let fft_size = self.n_fft.next_power_of_two();
-        let n_freqs = self.n_fft / 2 + 1;
 
         // Pre-allocate all temporary buffers once
         let mut windowed = vec![0.0f32; fft_size];
