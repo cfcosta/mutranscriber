@@ -92,6 +92,8 @@ pub struct Qwen3ASRModel {
     decoder: Qwen3Decoder,
     mel_extractor: MelSpectrogram,
     tokenizer: Tokenizer,
+    pre_audio_tokens: Vec<u32>,
+    post_audio_tokens: Vec<u32>,
     config: Qwen3ASRConfig,
     generation_config: crate::config::GenerationConfig,
     device: Device,
@@ -273,17 +275,56 @@ impl Qwen3ASRModel {
         // Use natural-length mel features and pass the true feature length to the
         // audio tower, matching the official Qwen3-ASR processor/model flow.
         let mel_extractor = MelSpectrogram::new().without_padding();
+        let (pre_audio_tokens, post_audio_tokens) = Self::build_prompt_tokens(&tokenizer)?;
 
         Ok(Self {
             audio_encoder,
             decoder,
             mel_extractor,
             tokenizer,
+            pre_audio_tokens,
+            post_audio_tokens,
             config,
             generation_config: crate::config::GenerationConfig::default(),
             device: device.clone(),
             dtype,
         })
+    }
+
+    fn build_prompt_tokens(tokenizer: &Tokenizer) -> Result<(Vec<u32>, Vec<u32>)> {
+        // ChatML-style prompt format (from chat_template.json):
+        // <|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|>
+        // <|audio_end|><|im_end|>\n<|im_start|>assistant\n
+        let system_tokens = tokenizer
+            .encode("system", false)
+            .map_err(|e| candle_core::Error::Msg(format!("Tokenizer error: {}", e)))?;
+        let user_tokens = tokenizer
+            .encode("user", false)
+            .map_err(|e| candle_core::Error::Msg(format!("Tokenizer error: {}", e)))?;
+        let assistant_tokens = tokenizer
+            .encode("assistant", false)
+            .map_err(|e| candle_core::Error::Msg(format!("Tokenizer error: {}", e)))?;
+
+        let mut pre_audio_tokens: Vec<u32> = vec![special_tokens::IM_START];
+        pre_audio_tokens.extend(system_tokens.get_ids().iter().copied());
+        pre_audio_tokens.push(special_tokens::NEWLINE);
+        pre_audio_tokens.push(special_tokens::IM_END);
+        pre_audio_tokens.push(special_tokens::NEWLINE);
+        pre_audio_tokens.push(special_tokens::IM_START);
+        pre_audio_tokens.extend(user_tokens.get_ids().iter().copied());
+        pre_audio_tokens.push(special_tokens::NEWLINE);
+        pre_audio_tokens.push(special_tokens::AUDIO_START);
+
+        let mut post_audio_tokens: Vec<u32> = vec![
+            special_tokens::AUDIO_END,
+            special_tokens::IM_END,
+            special_tokens::NEWLINE,
+            special_tokens::IM_START,
+        ];
+        post_audio_tokens.extend(assistant_tokens.get_ids().iter().copied());
+        post_audio_tokens.push(special_tokens::NEWLINE);
+
+        Ok((pre_audio_tokens, post_audio_tokens))
     }
 
     /// Set generation configuration.
@@ -542,61 +583,15 @@ impl Qwen3ASRModel {
         let device = audio_features.device().clone();
         let n_audio_frames = audio_features.dim(1)?;
 
-        // ChatML-style prompt format (from chat_template.json):
-        // <|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|>[audio]<|audio_end|><|im_end|>\n<|im_start|>assistant\n
-        let im_start_token = special_tokens::IM_START;
-        let im_end_token = special_tokens::IM_END;
-        let audio_start_token = special_tokens::AUDIO_START;
-        let audio_end_token = special_tokens::AUDIO_END;
-
-        // Encode the prompt tokens
-        let system_tokens = self
-            .tokenizer
-            .encode("system", false)
-            .map_err(|e| candle_core::Error::Msg(format!("Tokenizer error: {}", e)))?;
-        let user_tokens = self
-            .tokenizer
-            .encode("user", false)
-            .map_err(|e| candle_core::Error::Msg(format!("Tokenizer error: {}", e)))?;
-        let assistant_tokens = self
-            .tokenizer
-            .encode("assistant", false)
-            .map_err(|e| candle_core::Error::Msg(format!("Tokenizer error: {}", e)))?;
-        let newline_token = special_tokens::NEWLINE;
-
-        tracing::debug!("system tokens: {:?}", system_tokens.get_ids());
-        tracing::debug!("user tokens: {:?}", user_tokens.get_ids());
-        tracing::debug!("assistant tokens: {:?}", assistant_tokens.get_ids());
-
-        // Build the prompt sequence before audio
-        // Format: <|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|>
-        let mut pre_audio_tokens: Vec<u32> = vec![im_start_token];
-        pre_audio_tokens.extend(system_tokens.get_ids().iter().copied());
-        pre_audio_tokens.push(newline_token);
-        pre_audio_tokens.push(im_end_token);
-        pre_audio_tokens.push(newline_token);
-        pre_audio_tokens.push(im_start_token);
-        pre_audio_tokens.extend(user_tokens.get_ids().iter().copied());
-        pre_audio_tokens.push(newline_token);
-        pre_audio_tokens.push(audio_start_token);
-
-        // Build the prompt sequence after audio.
-        // Match the official chat template from the model repo:
-        // <|audio_end|><|im_end|>\n<|im_start|>assistant\n
-        let mut post_audio_tokens: Vec<u32> =
-            vec![audio_end_token, im_end_token, newline_token, im_start_token];
-        post_audio_tokens.extend(assistant_tokens.get_ids().iter().copied());
-        post_audio_tokens.push(newline_token);
-
-        tracing::debug!("Pre-audio tokens: {:?}", pre_audio_tokens);
-        tracing::debug!("Post-audio tokens: {:?}", post_audio_tokens);
+        tracing::debug!("Pre-audio tokens: {:?}", self.pre_audio_tokens);
+        tracing::debug!("Post-audio tokens: {:?}", self.post_audio_tokens);
 
         // Reset KV cache
         self.decoder.clear_kv_cache();
 
         // Get embeddings for all prompt parts
-        let pre_tensor = Tensor::new(pre_audio_tokens.as_slice(), &device)?.unsqueeze(0)?;
-        let post_tensor = Tensor::new(post_audio_tokens.as_slice(), &device)?.unsqueeze(0)?;
+        let pre_tensor = Tensor::new(self.pre_audio_tokens.as_slice(), &device)?.unsqueeze(0)?;
+        let post_tensor = Tensor::new(self.post_audio_tokens.as_slice(), &device)?.unsqueeze(0)?;
 
         let pre_embed = self.decoder.get_token_embeddings(&pre_tensor)?;
         let post_embed = self.decoder.get_token_embeddings(&post_tensor)?;
@@ -616,7 +611,8 @@ impl Qwen3ASRModel {
 
         // Concatenate: [pre_tokens, audio_features, post_tokens]
         let combined = Tensor::cat(&[pre_embed, audio_features, post_embed], 1)?;
-        let total_prompt_len = pre_audio_tokens.len() + n_audio_frames + post_audio_tokens.len();
+        let total_prompt_len =
+            self.pre_audio_tokens.len() + n_audio_frames + self.post_audio_tokens.len();
 
         tracing::debug!("Combined embedding shape: {:?}", combined.dims());
 
