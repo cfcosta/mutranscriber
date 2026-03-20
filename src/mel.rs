@@ -14,6 +14,7 @@ pub const CHUNK_LENGTH: usize = 30; // seconds
 pub const N_SAMPLES: usize = CHUNK_LENGTH * SAMPLE_RATE; // 480,000 samples
 
 /// Pre-computed mel filterbank for 128 bins.
+#[derive(Clone)]
 pub struct MelFilters {
     filters: Vec<f32>,
     ranges: Vec<(usize, usize)>,
@@ -212,6 +213,7 @@ fn create_mel_filterbank(n_mels: usize, n_fft: usize, sample_rate: usize) -> Vec
 }
 
 /// Pre-computed Hann window for Fft.
+#[derive(Clone)]
 pub struct HannWindow {
     window: Vec<f32>,
 }
@@ -230,6 +232,7 @@ impl HannWindow {
 }
 
 /// Fft computation using Cooley-Tukey algorithm.
+#[derive(Clone)]
 pub struct Fft {
     size: usize,
     twiddles_re: Vec<f32>,
@@ -343,6 +346,7 @@ impl Fft {
 }
 
 /// Mel spectrogram extractor for Qwen3-ASR.
+#[derive(Clone)]
 pub struct MelSpectrogram {
     mel_filters: Arc<MelFilters>,
     hann_window: HannWindow,
