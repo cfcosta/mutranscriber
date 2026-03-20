@@ -86,6 +86,9 @@ struct Attention {
     q_proj: Linear,
     k_proj: Linear,
     v_proj: Linear,
+    qkv_proj: Linear,
+    q_out_dim: usize,
+    kv_out_dim: usize,
     o_proj: Linear,
     q_norm: RmsNorm,
     k_norm: RmsNorm,
@@ -103,11 +106,24 @@ impl Attention {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim;
+        let q_out_dim = num_heads * head_dim;
+        let kv_out_dim = num_kv_heads * head_dim;
+
+        let q_proj = linear_no_bias(cfg.hidden_size, q_out_dim, vb.pp("q_proj"))?;
+        let k_proj = linear_no_bias(cfg.hidden_size, kv_out_dim, vb.pp("k_proj"))?;
+        let v_proj = linear_no_bias(cfg.hidden_size, kv_out_dim, vb.pp("v_proj"))?;
+        let qkv_proj = Linear::new(
+            Tensor::cat(&[q_proj.weight(), k_proj.weight(), v_proj.weight()], 0)?,
+            None,
+        );
 
         Ok(Self {
-            q_proj: linear_no_bias(cfg.hidden_size, num_heads * head_dim, vb.pp("q_proj"))?,
-            k_proj: linear_no_bias(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?,
-            v_proj: linear_no_bias(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?,
+            q_proj,
+            k_proj,
+            v_proj,
+            qkv_proj,
+            q_out_dim,
+            kv_out_dim,
             o_proj: linear_no_bias(num_heads * head_dim, cfg.hidden_size, vb.pp("o_proj"))?,
             q_norm: rms_norm(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?,
             k_norm: rms_norm(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?,
@@ -171,9 +187,19 @@ impl Attention {
     fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         let (batch, seq_len, _) = x.dims3()?;
 
-        let q = self.q_proj.forward(x)?;
-        let k = self.k_proj.forward(x)?;
-        let v = self.v_proj.forward(x)?;
+        let (q, k, v) = if seq_len == 1 && x.device().is_cuda() {
+            let qkv = self.qkv_proj.forward(x)?;
+            let q = qkv.narrow(2, 0, self.q_out_dim)?;
+            let k = qkv.narrow(2, self.q_out_dim, self.kv_out_dim)?;
+            let v = qkv.narrow(2, self.q_out_dim + self.kv_out_dim, self.kv_out_dim)?;
+            (q, k, v)
+        } else {
+            (
+                self.q_proj.forward(x)?,
+                self.k_proj.forward(x)?,
+                self.v_proj.forward(x)?,
+            )
+        };
 
         // Reshape to (batch, seq, num_heads, head_dim) — already the layout
         // flash_attn and our KV cache expect, so no transposes needed on CUDA.
