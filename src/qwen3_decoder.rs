@@ -109,13 +109,24 @@ impl Attention {
         let q_out_dim = num_heads * head_dim;
         let kv_out_dim = num_kv_heads * head_dim;
 
-        let q_proj = linear_no_bias(cfg.hidden_size, q_out_dim, vb.pp("q_proj"))?;
-        let k_proj = linear_no_bias(cfg.hidden_size, kv_out_dim, vb.pp("k_proj"))?;
-        let v_proj = linear_no_bias(cfg.hidden_size, kv_out_dim, vb.pp("v_proj"))?;
-        let qkv_proj = Linear::new(
-            Tensor::cat(&[q_proj.weight(), k_proj.weight(), v_proj.weight()], 0)?,
+        let q_proj_loaded = linear_no_bias(cfg.hidden_size, q_out_dim, vb.pp("q_proj"))?;
+        let k_proj_loaded = linear_no_bias(cfg.hidden_size, kv_out_dim, vb.pp("k_proj"))?;
+        let v_proj_loaded = linear_no_bias(cfg.hidden_size, kv_out_dim, vb.pp("v_proj"))?;
+        let qkv_weight = Tensor::cat(
+            &[
+                q_proj_loaded.weight(),
+                k_proj_loaded.weight(),
+                v_proj_loaded.weight(),
+            ],
+            0,
+        )?;
+        let q_proj = Linear::new(qkv_weight.narrow(0, 0, q_out_dim)?, None);
+        let k_proj = Linear::new(qkv_weight.narrow(0, q_out_dim, kv_out_dim)?, None);
+        let v_proj = Linear::new(
+            qkv_weight.narrow(0, q_out_dim + kv_out_dim, kv_out_dim)?,
             None,
         );
+        let qkv_proj = Linear::new(qkv_weight, None);
 
         Ok(Self {
             q_proj,
