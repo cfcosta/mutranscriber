@@ -94,6 +94,8 @@ pub struct Qwen3ASRModel {
     tokenizer: Tokenizer,
     pre_audio_tokens: Vec<u32>,
     post_audio_tokens: Vec<u32>,
+    pre_audio_tensor: Tensor,
+    post_audio_tensor: Tensor,
     config: Qwen3ASRConfig,
     generation_config: crate::config::GenerationConfig,
     device: Device,
@@ -276,6 +278,8 @@ impl Qwen3ASRModel {
         // audio tower, matching the official Qwen3-ASR processor/model flow.
         let mel_extractor = MelSpectrogram::new().without_padding();
         let (pre_audio_tokens, post_audio_tokens) = Self::build_prompt_tokens(&tokenizer)?;
+        let pre_audio_tensor = Tensor::new(pre_audio_tokens.as_slice(), device)?.unsqueeze(0)?;
+        let post_audio_tensor = Tensor::new(post_audio_tokens.as_slice(), device)?.unsqueeze(0)?;
 
         Ok(Self {
             audio_encoder,
@@ -284,6 +288,8 @@ impl Qwen3ASRModel {
             tokenizer,
             pre_audio_tokens,
             post_audio_tokens,
+            pre_audio_tensor,
+            post_audio_tensor,
             config,
             generation_config: crate::config::GenerationConfig::default(),
             device: device.clone(),
@@ -590,11 +596,8 @@ impl Qwen3ASRModel {
         self.decoder.clear_kv_cache();
 
         // Get embeddings for all prompt parts
-        let pre_tensor = Tensor::new(self.pre_audio_tokens.as_slice(), &device)?.unsqueeze(0)?;
-        let post_tensor = Tensor::new(self.post_audio_tokens.as_slice(), &device)?.unsqueeze(0)?;
-
-        let pre_embed = self.decoder.get_token_embeddings(&pre_tensor)?;
-        let post_embed = self.decoder.get_token_embeddings(&post_tensor)?;
+        let pre_embed = self.decoder.get_token_embeddings(&self.pre_audio_tensor)?;
+        let post_embed = self.decoder.get_token_embeddings(&self.post_audio_tensor)?;
 
         // Validate tensor shapes before concatenation
         let (_, _, pre_hidden) = pre_embed.dims3()?;
