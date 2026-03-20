@@ -56,22 +56,41 @@ impl RotaryEmbedding {
 struct Mlp {
     gate_proj: Linear,
     up_proj: Linear,
+    gate_up_proj: Linear,
+    intermediate_size: usize,
     down_proj: Linear,
 }
 
 impl Mlp {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let gate_proj = linear_no_bias(cfg.hidden_size, cfg.intermediate_size, vb.pp("gate_proj"))?;
+        let up_proj = linear_no_bias(cfg.hidden_size, cfg.intermediate_size, vb.pp("up_proj"))?;
+        let gate_up_weight = Tensor::cat(&[gate_proj.weight(), up_proj.weight()], 0)?;
+        let gate_proj = Linear::new(gate_up_weight.narrow(0, 0, cfg.intermediate_size)?, None);
+        let up_proj = Linear::new(
+            gate_up_weight.narrow(0, cfg.intermediate_size, cfg.intermediate_size)?,
+            None,
+        );
+
         Ok(Self {
-            gate_proj: linear_no_bias(cfg.hidden_size, cfg.intermediate_size, vb.pp("gate_proj"))?,
-            up_proj: linear_no_bias(cfg.hidden_size, cfg.intermediate_size, vb.pp("up_proj"))?,
+            gate_proj,
+            up_proj,
+            gate_up_proj: Linear::new(gate_up_weight, None),
+            intermediate_size: cfg.intermediate_size,
             down_proj: linear_no_bias(cfg.intermediate_size, cfg.hidden_size, vb.pp("down_proj"))?,
         })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let gate = self.gate_proj.forward(x)?;
+        let (gate, up) = if x.dims3()?.1 == 1 && x.device().is_cuda() {
+            let gate_up = self.gate_up_proj.forward(x)?;
+            let gate = gate_up.narrow(2, 0, self.intermediate_size)?;
+            let up = gate_up.narrow(2, self.intermediate_size, self.intermediate_size)?;
+            (gate, up)
+        } else {
+            (self.gate_proj.forward(x)?, self.up_proj.forward(x)?)
+        };
         let gate = candle_nn::ops::silu(&gate)?;
-        let up = self.up_proj.forward(x)?;
         self.down_proj.forward(&(gate * up)?)
     }
 }
